@@ -1,0 +1,69 @@
+{
+    "Comment": "Flujo de trabajo para Microservicio de Pagos y Facturacion",
+    "StartAt": "Seleccionar Flujo de evento de pago",
+    "States": {
+        "Seleccionar Flujo de evento de pago": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "DynamoDB GetItem"
+                }
+            ]
+        },
+        "DynamoDB GetItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "Next": "Lambda Invoke"
+        },
+        "Lambda Invoke": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Output": "{% $states.result.Payload %}",
+            "Arguments": {
+                "FunctionName": "",
+                "Payload": "{% $states.input %}"
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                    ],
+                    "IntervalSeconds": 1,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 2,
+                    "JitterStrategy": "FULL"
+                }
+            ],
+            "Next": "Call HTTPS APIs"
+        },
+        "Call HTTPS APIs": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::http:invoke",
+            "Arguments": {},
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "BackoffRate": 2,
+                    "IntervalSeconds": 1,
+                    "MaxAttempts": 3,
+                    "JitterStrategy": "FULL"
+                }
+            ],
+            "End": true
+        }
+    },
+    "QueryLanguage": "JSONata"
+}

@@ -1,0 +1,34 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Elección",
+    "States": {
+        "Elección": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "DynamoDB UpdateItem"
+                }
+            ]
+        },
+        "DynamoDB UpdateItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Arguments": {
+                "TableName": "DB_Clientes",
+                "Key": {
+                    "user_id": {
+                        "S": "{% 'USER#' & $userId %}"
+                    }
+                },
+                "UpdateExpression": "SET carrito.#id = :prod",
+                "ExpressionAttributeValues": {
+                    ":myValueRef": {
+                        "S": "MyValue"
+                    }
+                }
+            },
+            "End": true
+        }
+    },
+    "QueryLanguage": "JSONata"
+}
