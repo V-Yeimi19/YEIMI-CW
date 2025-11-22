@@ -1,0 +1,479 @@
+{
+  "Comment": "State machine para el microservicio de Delivery - Gestiona asignacion de cocinero, despachador, repartidor y confirmacion de entrega",
+  "StartAt": "AsignarCocinero",
+  "States": {
+    "AsignarCocinero": {
+      "Type": "Task",
+      "Comment": "Asigna un cocinero disponible al pedido y espera confirmacion de preparacion",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Arguments": {
+        "FunctionName": "${AsignarCocineroArn}",
+        "Payload": {
+          "orderId": "{% $states.input.detail.orderId %}",
+          "restaurantId": "{% $states.input.detail.restaurantId %}",
+          "items": "{% $states.input.detail.items %}",
+          "customerId": "{% $states.input.detail.customerId %}",
+          "taskToken": "{% $states.context.Task.Token %}"
+        }
+      },
+      "Output": "{% {'detail': $states.input.detail, 'cocinero': $states.result.Payload} %}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotificarErrorAsignacionCocinero",
+          "ResultPath": "{% {'error': $states.result} %}"
+        }
+      ],
+      "Next": "PedidoEnPreparacion"
+    },
+
+    "PedidoEnPreparacion": {
+      "Type": "Task",
+      "Comment": "Notifica que el pedido esta siendo preparado por el cocinero",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "EN_PREPARACION",
+              "cocineroId": "{% $states.input.cocinero.cocineroId %}",
+              "cocineroNombre": "{% $states.input.cocinero.nombre %}",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "PedidoEnPreparacion",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Output": "{% $states.input %}",
+      "Retry": [
+        {
+          "ErrorEquals": ["EventBridge.EventBridgeException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "AsignarDespachador"
+    },
+
+    "AsignarDespachador": {
+      "Type": "Task",
+      "Comment": "Asigna un despachador para empaquetar el pedido",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${AsignarDespachadorArn}",
+        "Payload": {
+          "orderId": "{% $states.input.detail.orderId %}",
+          "restaurantId": "{% $states.input.detail.restaurantId %}",
+          "cocineroId": "{% $states.input.cocinero.cocineroId %}",
+          "items": "{% $states.input.detail.items %}"
+        }
+      },
+      "Output": "{% {'detail': $states.input.detail, 'cocinero': $states.input.cocinero, 'despachador': $states.result.Payload} %}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotificarErrorAsignacionDespachador",
+          "ResultPath": "{% {'error': $states.result} %}"
+        }
+      ],
+      "Next": "PedidoEnDespacho"
+    },
+
+    "PedidoEnDespacho": {
+      "Type": "Task",
+      "Comment": "Notifica que el pedido esta siendo empacado para despacho",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "EN_DESPACHO",
+              "despachadorId": "{% $states.input.despachador.despachadorId %}",
+              "despachadorNombre": "{% $states.input.despachador.nombre %}",
+              "cocineroId": "{% $states.input.cocinero.cocineroId %}",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "PedidoEnDespacho",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Output": "{% $states.input %}",
+      "Retry": [
+        {
+          "ErrorEquals": ["EventBridge.EventBridgeException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "AsignarRepartidor"
+    },
+
+    "AsignarRepartidor": {
+      "Type": "Task",
+      "Comment": "Asigna un repartidor disponible segun la zona de entrega",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${AsignarRepartidorArn}",
+        "Payload": {
+          "orderId": "{% $states.input.detail.orderId %}",
+          "restaurantId": "{% $states.input.detail.restaurantId %}",
+          "deliveryAddress": "{% $states.input.detail.deliveryAddress %}",
+          "despachadorId": "{% $states.input.despachador.despachadorId %}",
+          "customerId": "{% $states.input.detail.customerId %}"
+        }
+      },
+      "Output": "{% {'detail': $states.input.detail, 'cocinero': $states.input.cocinero, 'despachador': $states.input.despachador, 'repartidor': $states.result.Payload} %}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotificarErrorAsignacionRepartidor",
+          "ResultPath": "{% {'error': $states.result} %}"
+        }
+      ],
+      "Next": "PedidoEnCamino"
+    },
+
+    "PedidoEnCamino": {
+      "Type": "Task",
+      "Comment": "Notifica que el repartidor esta en camino con el pedido - incluye URL de API para confirmacion",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "EN_CAMINO",
+              "repartidorId": "{% $states.input.repartidor.repartidorId %}",
+              "repartidorNombre": "{% $states.input.repartidor.nombre %}",
+              "vehiculo": "{% $states.input.repartidor.vehiculo %}",
+              "estimatedDeliveryTime": "{% $states.input.repartidor.estimatedTime %}",
+              "deliveryAddress": "{% $states.input.detail.deliveryAddress %}",
+              "confirmationApiEndpoint": "${DeliveryApiUrl}/delivery/{% $states.input.detail.orderId %}/confirm",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "PedidoEnCamino",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Output": "{% $states.input %}",
+      "Retry": [
+        {
+          "ErrorEquals": ["EventBridge.EventBridgeException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "RegistrarPendienteConfirmacion"
+    },
+
+    "RegistrarPendienteConfirmacion": {
+      "Type": "Task",
+      "Comment": "Lambda ConfirmarEntrega: registra el pedido como pendiente de confirmacion y guarda el taskToken en DynamoDB. La API REST /delivery/{orderId}/confirm usara este token para completar el flujo.",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Arguments": {
+        "FunctionName": "${ConfirmarEntregaArn}",
+        "Payload": {
+          "orderId": "{% $states.input.detail.orderId %}",
+          "restaurantId": "{% $states.input.detail.restaurantId %}",
+          "customerId": "{% $states.input.detail.customerId %}",
+          "repartidorId": "{% $states.input.repartidor.repartidorId %}",
+          "repartidorNombre": "{% $states.input.repartidor.nombre %}",
+          "deliveryAddress": "{% $states.input.detail.deliveryAddress %}",
+          "taskToken": "{% $states.context.Task.Token %}",
+          "executionId": "{% $states.context.Execution.Id %}"
+        }
+      },
+      "Output": "{% {'detail': $states.input.detail, 'cocinero': $states.input.cocinero, 'despachador': $states.input.despachador, 'repartidor': $states.input.repartidor, 'entrega': $states.result} %}",
+      "TimeoutSeconds": 7200,
+      "HeartbeatSeconds": 600,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "NotificarTimeoutEntrega",
+          "ResultPath": "{% {'error': $states.result} %}"
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "Next": "NotificarEntregaCancelada",
+          "ResultPath": "{% {'error': $states.result} %}"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotificarErrorEntrega",
+          "ResultPath": "{% {'error': $states.result} %}"
+        }
+      ],
+      "Next": "PedidoEntregado"
+    },
+
+    "PedidoEntregado": {
+      "Type": "Task",
+      "Comment": "Notifica que el pedido fue entregado exitosamente",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "ENTREGADO",
+              "repartidorId": "{% $states.input.repartidor.repartidorId %}",
+              "repartidorNombre": "{% $states.input.repartidor.nombre %}",
+              "cocineroId": "{% $states.input.cocinero.cocineroId %}",
+              "despachadorId": "{% $states.input.despachador.despachadorId %}",
+              "deliveryTimestamp": "{% $states.input.entrega.timestamp %}",
+              "confirmationCode": "{% $states.input.entrega.confirmationCode %}",
+              "totalDeliveryTimeMinutes": "{% $states.input.entrega.totalTime %}",
+              "deliveryAddress": "{% $states.input.detail.deliveryAddress %}",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "PedidoEntregado",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Output": "{% {'success': true, 'orderId': $states.input.detail.orderId, 'status': 'ENTREGADO', 'confirmationCode': $states.input.entrega.confirmationCode, 'totalDeliveryTimeMinutes': $states.input.entrega.totalTime} %}",
+      "Retry": [
+        {
+          "ErrorEquals": ["EventBridge.EventBridgeException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    },
+
+    "NotificarErrorAsignacionCocinero": {
+      "Type": "Task",
+      "Comment": "Notifica error al asignar cocinero",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "ERROR",
+              "errorType": "ASIGNACION_COCINERO_FALLIDA",
+              "errorMessage": "No se pudo asignar un cocinero al pedido",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "NotificarErrorAsignacionDespachador": {
+      "Type": "Task",
+      "Comment": "Notifica error al asignar despachador",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "ERROR",
+              "errorType": "ASIGNACION_DESPACHADOR_FALLIDA",
+              "errorMessage": "No se pudo asignar un despachador al pedido",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "NotificarErrorAsignacionRepartidor": {
+      "Type": "Task",
+      "Comment": "Notifica error al asignar repartidor",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "ERROR",
+              "errorType": "ASIGNACION_REPARTIDOR_FALLIDA",
+              "errorMessage": "No se pudo asignar un repartidor al pedido",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "NotificarTimeoutEntrega": {
+      "Type": "Task",
+      "Comment": "Notifica que el tiempo de espera para confirmacion expiro (2 horas)",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "repartidorId": "{% $states.input.repartidor.repartidorId %}",
+              "status": "ERROR",
+              "errorType": "TIMEOUT_ENTREGA",
+              "errorMessage": "Tiempo de espera para confirmacion de entrega excedido (2 horas)",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "NotificarEntregaCancelada": {
+      "Type": "Task",
+      "Comment": "Notifica que la entrega fue cancelada",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "repartidorId": "{% $states.input.repartidor.repartidorId %}",
+              "status": "CANCELADO",
+              "errorType": "ENTREGA_CANCELADA",
+              "errorMessage": "La entrega fue cancelada",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "NotificarErrorEntrega": {
+      "Type": "Task",
+      "Comment": "Notifica error general en la confirmacion de entrega",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Arguments": {
+        "Entries": [
+          {
+            "Detail": {
+              "orderId": "{% $states.input.detail.orderId %}",
+              "restaurantId": "{% $states.input.detail.restaurantId %}",
+              "customerId": "{% $states.input.detail.customerId %}",
+              "status": "ERROR",
+              "errorType": "ERROR_CONFIRMACION_ENTREGA",
+              "errorMessage": "Error al procesar la confirmacion de entrega",
+              "timestamp": "{% $now() %}"
+            },
+            "DetailType": "ErrorDelivery",
+            "EventBusName": "${EventBusName}",
+            "Source": "delivery.service"
+          }
+        ]
+      },
+      "Next": "FinalizarConError"
+    },
+
+    "FinalizarConError": {
+      "Type": "Fail",
+      "Error": "DeliveryProcessFailed",
+      "Cause": "El proceso de delivery fallo. Ver detalles en los eventos publicados en EventBridge."
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
