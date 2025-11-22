@@ -1,8 +1,8 @@
 {
     "Comment": "A description of my state machine",
-    "StartAt": "Elección",
+    "StartAt": "Selector de Evento",
     "States": {
-        "Elección": {
+        "Selector de Evento": {
             "Type": "Choice",
             "Choices": [
                 {
@@ -37,17 +37,17 @@
                     "JitterStrategy": "FULL"
                 }
             ],
-            "Next": "DynamoDB UpdateItem",
+            "Next": "Agregar Pedido al Carrito",
             "Catch": [
                 {
                     "ErrorEquals": [
                         "States.TaskFailed"
                     ],
-                    "Next": "Elección"
+                    "Next": "Selector de Evento"
                 }
             ]
         },
-        "DynamoDB UpdateItem": {
+        "Agregar Pedido al Carrito": {
             "Type": "Task",
             "Resource": "arn:aws:states:::dynamodb:updateItem",
             "Arguments": {
@@ -109,60 +109,27 @@
                 "ExclusiveStartKey": "{% $nextToken %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-            "Next": "API Gateway Invoke"
+            "Next": "Devolver las ordenes al cliente"
         },
-        "API Gateway Invoke": {
+        "Devolver las ordenes al cliente": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::apigateway:invoke",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Output": "{% $states.result.Payload %}",
             "Arguments": {
-                "ApiEndpoint": "MyApiId.execute-api.us-east-1.amazonaws.com",
-                "Method": "POST",
-                "AllowNullValues": true,
-                "Headers": {
-                    "Header1": [
-                        "HeaderValue1"
-                    ],
-                    "Header2": [
-                        "HeaderValue2",
-                        "HeaderValue3"
-                    ]
-                },
-                "Stage": "MyStage",
-                "Path": "/pets/dog/1",
-                "QueryParameters": {
-                    "QueryParameter1": [
-                        "QueryParameterValue1"
-                    ],
-                    "QueryParameter2": [
-                        "QueryParameterValue2",
-                        "QueryParameterValue3"
-                    ]
-                },
-                "RequestBody": {
-                    "Payload": "Hello from Step Functions!"
-                },
-                "AuthType": "IAM_ROLE"
-            },
-            "Next": "Call HTTPS APIs"
-        },
-        "Call HTTPS APIs": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::http:invoke",
-            "Arguments": {
-                "ApiEndpoint": "k",
-                "Method": "POST",
-                "InvocationConfig": {
-                    "ConnectionArn": ""
-                }
+                "FunctionName": "",
+                "Payload": "{% $states.input %}"
             },
             "Retry": [
                 {
                     "ErrorEquals": [
-                        "States.ALL"
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
                     ],
-                    "BackoffRate": 2,
                     "IntervalSeconds": 1,
                     "MaxAttempts": 3,
+                    "BackoffRate": 2,
                     "JitterStrategy": "FULL"
                 }
             ],
