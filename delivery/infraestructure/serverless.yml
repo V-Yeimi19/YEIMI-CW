@@ -1,0 +1,692 @@
+org: yeimivarela
+service: delivery-microservice
+
+provider:
+  name: aws
+  runtime: python3.13	
+  # Default memory size for functions (default: 1024MB)
+  memorySize: 1024
+  timeout: 20
+  iam:
+    role: arn:aws:iam::985026482300:role/LabRole
+
+Parameters:
+  EventBusName:
+    Type: String
+    Default: china-wok-event-bus
+    Description: Nombre del Event Bus
+  SesFromEmail:
+    Type: String
+    Description: Email verificado en SES para enviar notificaciones
+    Default: notificaciones@chinawok.com
+
+Resources:
+  # Tabla Pedidos
+  PedidosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Pedidos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pedido_id
+          AttributeType: S
+        - AttributeName: entity
+          AttributeType: S
+        - AttributeName: sucursal
+          AttributeType: S
+        - AttributeName: estadoFecha
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pedido_id
+          KeyType: HASH
+        - AttributeName: entity
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: SucursalIndex
+          KeySchema:
+            - AttributeName: sucursal
+              KeyType: HASH
+            - AttributeName: estadoFecha
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # Step Functions State Machine
+  DeliveryStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: delivery-state-machine
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      Definition:
+        Comment: Microservicio Delivery - Event-driven sin Lambdas
+        StartAt: IdentificarTipoEvento
+        States:
+          IdentificarTipoEvento:
+            Type: Choice
+            Comment: Enruta segun el tipo de evento recibido
+            Choices:
+              - Variable: $['detail-type']
+                StringEquals: PagoConfirmado
+                Next: CrearPedidoEnDynamoDB
+              - Variable: $['detail-type']
+                StringEquals: ComidaPreparada
+                Next: BuscarDespachadorDisponible
+              - Variable: $['detail-type']
+                StringEquals: Despachado
+                Next: BuscarRepartidorDisponible
+              - Variable: $['detail-type']
+                StringEquals: Entregado
+                Next: ActualizarPedidoEntregado
+            Default: EventoNoReconocido
+          
+          CrearPedidoEnDynamoDB:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PedidosTable
+              Item:
+                pedido_id:
+                  S.$: $.detail.orderId
+                entity:
+                  S: SETTINGS
+                sucursal:
+                  S.$: $.detail.sucursalId
+                Cliente:
+                  S.$: $.detail.customerId
+                fecha_creacion:
+                  S.$: $$.State.EnteredTime
+                atributos:
+                  S.$: States.JsonToString($.detail)
+            ResultPath: $.createResult
+            Next: BuscarCocineroDisponible
+          
+          BuscarCocineroDisponible:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:query
+            Parameters:
+              TableName: Usuarios
+              IndexName: TenantRoleIndex
+              KeyConditionExpression: tenant_context = :tenantContext AND #role = :role
+              FilterExpression: contains(atributos, :activo)
+              ExpressionAttributeNames:
+                "#role": Role
+              ExpressionAttributeValues:
+                ":tenantContext":
+                  S.$: States.Format('TENANT#{}', $.detail.sucursalId)
+                ":role":
+                  S: COCINERO
+                ":activo":
+                  S: '"activo":true'
+              Limit: 1
+            ResultPath: $.cocineroQuery
+            Next: ValidarCocineroEncontrado
+          
+          ValidarCocineroEncontrado:
+            Type: Choice
+            Choices:
+              - Variable: $.cocineroQuery.Count
+                NumericGreaterThan: 0
+                Next: AsignarCocineroAlPedido
+            Default: ErrorNoHayCocineros
+          
+          AsignarCocineroAlPedido:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PedidosTable
+              Item:
+                pedido_id:
+                  S.$: $.detail.orderId
+                entity:
+                  S: EnPreparacion
+                sucursal:
+                  S.$: $.detail.sucursalId
+                estadoFecha:
+                  S.$: States.Format('EnPreparacion#{}', $$.State.EnteredTime)
+                Cliente:
+                  S.$: $.detail.customerId
+                Estado:
+                  S: EnPreparacion
+                DesEstado:
+                  S: Pedido en preparación
+                Historial:
+                  L:
+                    - M:
+                        estado:
+                          S: EnPreparacion
+                        timestamp:
+                          S.$: $$.State.EnteredTime
+                        actor:
+                          S.$: $.cocineroQuery.Items[0].user_id.S
+                atributos:
+                  S.$: States.JsonToString($.cocineroQuery.Items[0])
+            ResultPath: $.asignacionResult
+            Next: PublicarEventoPreparacion
+          
+          PublicarEventoPreparacion:
+            Type: Parallel
+            Branches:
+              - StartAt: EnviarEmailPreparacion
+                States:
+                  EnviarEmailPreparacion:
+                    Type: Task
+                    Resource: arn:aws:states:::aws-sdk:ses:sendEmail
+                    Parameters:
+                      Source: !Ref SesFromEmail
+                      Destination:
+                        ToAddresses:
+                          - $.detail.customerEmail
+                      Message:
+                        Subject:
+                          Data: Tu pedido está en preparación - China Wok
+                        Body:
+                          Html:
+                            Data.$: States.Format('<html><body><h2>¡Tu pedido está siendo preparado!</h2><p>Pedido: <strong>{}</strong></p><p>Estado: <strong>EN PREPARACIÓN</strong></p></body></html>', $.detail.orderId)
+                    Retry:
+                      - ErrorEquals:
+                          - States.ALL
+                        IntervalSeconds: 2
+                        MaxAttempts: 2
+                        BackoffRate: 2
+                    Catch:
+                      - ErrorEquals:
+                          - States.ALL
+                        Next: EmailFallido
+                    End: true
+                  EmailFallido:
+                    Type: Pass
+                    End: true
+              - StartAt: PublicarEventoNotificacion
+                States:
+                  PublicarEventoNotificacion:
+                    Type: Task
+                    Resource: arn:aws:states:::events:putEvents
+                    Parameters:
+                      Entries:
+                        - Source: delivery.service
+                          DetailType: NotificacionPedido
+                          Detail:
+                            tipo: PedidoEnPreparacion
+                            orderId.$: $.detail.orderId
+                            sucursalId.$: $.detail.sucursalId
+                            customerId.$: $.detail.customerId
+                            status: EnPreparacion
+                            mensaje: Pedido en preparación
+                            timestamp.$: $$.State.EnteredTime
+                          EventBusName: !Ref EventBusName
+                    End: true
+            End: true
+          
+          BuscarDespachadorDisponible:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:query
+            Parameters:
+              TableName: Usuarios
+              IndexName: TenantRoleIndex
+              KeyConditionExpression: tenant_context = :tenantContext AND #role = :role
+              FilterExpression: contains(atributos, :activo)
+              ExpressionAttributeNames:
+                "#role": Role
+              ExpressionAttributeValues:
+                ":tenantContext":
+                  S.$: States.Format('TENANT#{}', $.detail.sucursalId)
+                ":role":
+                  S: DESPACHADOR
+                ":activo":
+                  S: '"activo":true'
+              Limit: 1
+            ResultPath: $.despachadorQuery
+            Next: ValidarDespachadorEncontrado
+          
+          ValidarDespachadorEncontrado:
+            Type: Choice
+            Choices:
+              - Variable: $.despachadorQuery.Count
+                NumericGreaterThan: 0
+                Next: AsignarDespachadorAlPedido
+            Default: ErrorNoHayDespachadores
+          
+          AsignarDespachadorAlPedido:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PedidosTable
+              Item:
+                pedido_id:
+                  S.$: $.detail.orderId
+                entity:
+                  S: EnDespacho
+                sucursal:
+                  S.$: $.detail.sucursalId
+                estadoFecha:
+                  S.$: States.Format('EnDespacho#{}', $$.State.EnteredTime)
+                Cliente:
+                  S.$: $.detail.customerId
+                Estado:
+                  S: EnDespacho
+                DesEstado:
+                  S: Pedido siendo empacado
+                Historial:
+                  L:
+                    - M:
+                        estado:
+                          S: EnDespacho
+                        timestamp:
+                          S.$: $$.State.EnteredTime
+                        actor:
+                          S.$: $.despachadorQuery.Items[0].user_id.S
+                atributos:
+                  S.$: States.JsonToString($.despachadorQuery.Items[0])
+            ResultPath: $.asignacionResult
+            Next: PublicarEventoDespacho
+          
+          PublicarEventoDespacho:
+            Type: Parallel
+            Branches:
+              - StartAt: EnviarEmailDespacho
+                States:
+                  EnviarEmailDespacho:
+                    Type: Task
+                    Resource: arn:aws:states:::aws-sdk:ses:sendEmail
+                    Parameters:
+                      Source: !Ref SesFromEmail
+                      Destination:
+                        ToAddresses:
+                          - $.detail.customerEmail
+                      Message:
+                        Subject:
+                          Data: Tu pedido está siendo empacado - China Wok
+                        Body:
+                          Html:
+                            Data.$: States.Format('<html><body><h2>¡Tu pedido está siendo empacado!</h2><p>Pedido: <strong>{}</strong></p><p>Estado: <strong>EN DESPACHO</strong></p></body></html>', $.detail.orderId)
+                    Retry:
+                      - ErrorEquals:
+                          - States.ALL
+                        IntervalSeconds: 2
+                        MaxAttempts: 2
+                    Catch:
+                      - ErrorEquals:
+                          - States.ALL
+                        Next: EmailFallido
+                    End: true
+                  EmailFallido:
+                    Type: Pass
+                    End: true
+              - StartAt: NotificarDespacho
+                States:
+                  NotificarDespacho:
+                    Type: Task
+                    Resource: arn:aws:states:::events:putEvents
+                    Parameters:
+                      Entries:
+                        - Source: delivery.service
+                          DetailType: NotificacionPedido
+                          Detail:
+                            tipo: PedidoEnDespacho
+                            orderId.$: $.detail.orderId
+                            sucursalId.$: $.detail.sucursalId
+                            customerId.$: $.detail.customerId
+                            status: EnDespacho
+                            mensaje: Pedido en despacho
+                            timestamp.$: $$.State.EnteredTime
+                          EventBusName: !Ref EventBusName
+                    End: true
+            End: true
+          
+          BuscarRepartidorDisponible:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:query
+            Parameters:
+              TableName: Usuarios
+              IndexName: TenantRoleIndex
+              KeyConditionExpression: tenant_context = :tenantContext AND #role = :role
+              FilterExpression: contains(atributos, :activo)
+              ExpressionAttributeNames:
+                "#role": Role
+              ExpressionAttributeValues:
+                ":tenantContext":
+                  S.$: States.Format('TENANT#{}', $.detail.sucursalId)
+                ":role":
+                  S: REPARTIDOR
+                ":activo":
+                  S: '"activo":true'
+              Limit: 1
+            ResultPath: $.repartidorQuery
+            Next: ValidarRepartidorEncontrado
+          
+          ValidarRepartidorEncontrado:
+            Type: Choice
+            Choices:
+              - Variable: $.repartidorQuery.Count
+                NumericGreaterThan: 0
+                Next: AsignarRepartidorAlPedido
+            Default: ErrorNoHayRepartidores
+          
+          AsignarRepartidorAlPedido:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PedidosTable
+              Item:
+                pedido_id:
+                  S.$: $.detail.orderId
+                entity:
+                  S: EnCamino
+                sucursal:
+                  S.$: $.detail.sucursalId
+                estadoFecha:
+                  S.$: States.Format('EnCamino#{}', $$.State.EnteredTime)
+                Cliente:
+                  S.$: $.detail.customerId
+                Estado:
+                  S: EnCamino
+                DesEstado:
+                  S: Pedido en camino
+                Historial:
+                  L:
+                    - M:
+                        estado:
+                          S: EnCamino
+                        timestamp:
+                          S.$: $$.State.EnteredTime
+                        actor:
+                          S.$: $.repartidorQuery.Items[0].user_id.S
+                atributos:
+                  S.$: States.JsonToString($.repartidorQuery.Items[0])
+            ResultPath: $.asignacionResult
+            Next: PublicarEventoEnCamino
+          
+          PublicarEventoEnCamino:
+            Type: Parallel
+            Branches:
+              - StartAt: EnviarEmailEnCamino
+                States:
+                  EnviarEmailEnCamino:
+                    Type: Task
+                    Resource: arn:aws:states:::aws-sdk:ses:sendEmail
+                    Parameters:
+                      Source: !Ref SesFromEmail
+                      Destination:
+                        ToAddresses:
+                          - $.detail.customerEmail
+                      Message:
+                        Subject:
+                          Data: ¡Tu pedido está en camino! - China Wok
+                        Body:
+                          Html:
+                            Data.$: States.Format('<html><body><h2>¡Tu pedido está en camino!</h2><p>Pedido: <strong>{}</strong></p><p>Estado: <strong>EN CAMINO</strong></p></body></html>', $.detail.orderId)
+                    Retry:
+                      - ErrorEquals:
+                          - States.ALL
+                        IntervalSeconds: 2
+                        MaxAttempts: 2
+                    Catch:
+                      - ErrorEquals:
+                          - States.ALL
+                        Next: EmailFallido
+                    End: true
+                  EmailFallido:
+                    Type: Pass
+                    End: true
+              - StartAt: NotificarEnCamino
+                States:
+                  NotificarEnCamino:
+                    Type: Task
+                    Resource: arn:aws:states:::events:putEvents
+                    Parameters:
+                      Entries:
+                        - Source: delivery.service
+                          DetailType: NotificacionPedido
+                          Detail:
+                            tipo: PedidoEnCamino
+                            orderId.$: $.detail.orderId
+                            sucursalId.$: $.detail.sucursalId
+                            customerId.$: $.detail.customerId
+                            status: EnCamino
+                            mensaje: Pedido en camino
+                            timestamp.$: $$.State.EnteredTime
+                          EventBusName: !Ref EventBusName
+                    End: true
+            End: true
+          
+          ActualizarPedidoEntregado:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PedidosTable
+              Item:
+                pedido_id:
+                  S.$: $.detail.orderId
+                entity:
+                  S: Entregado
+                sucursal:
+                  S.$: $.detail.sucursalId
+                estadoFecha:
+                  S.$: States.Format('Entregado#{}', $$.State.EnteredTime)
+                Cliente:
+                  S.$: $.detail.customerId
+                Estado:
+                  S: Entregado
+                DesEstado:
+                  S: Pedido entregado
+                Historial:
+                  L:
+                    - M:
+                        estado:
+                          S: Entregado
+                        timestamp:
+                          S.$: $$.State.EnteredTime
+                        confirmationCode:
+                          S.$: $.detail.confirmationCode
+                atributos:
+                  S.$: States.JsonToString($.detail)
+            ResultPath: $.entregadoResult
+            Next: PublicarEventoEntregado
+          
+          PublicarEventoEntregado:
+            Type: Parallel
+            Branches:
+              - StartAt: EnviarEmailEntregado
+                States:
+                  EnviarEmailEntregado:
+                    Type: Task
+                    Resource: arn:aws:states:::aws-sdk:ses:sendEmail
+                    Parameters:
+                      Source: !Ref SesFromEmail
+                      Destination:
+                        ToAddresses:
+                          - $.detail.customerEmail
+                      Message:
+                        Subject:
+                          Data: ¡Pedido entregado! - China Wok
+                        Body:
+                          Html:
+                            Data.$: States.Format('<html><body><h2>¡Pedido entregado!</h2><p>Pedido: <strong>{}</strong></p><p>Código: <strong>{}</strong></p></body></html>', $.detail.orderId, $.detail.confirmationCode)
+                    Retry:
+                      - ErrorEquals:
+                          - States.ALL
+                        IntervalSeconds: 2
+                        MaxAttempts: 2
+                    Catch:
+                      - ErrorEquals:
+                          - States.ALL
+                        Next: EmailFallido
+                    End: true
+                  EmailFallido:
+                    Type: Pass
+                    End: true
+              - StartAt: NotificarEntregado
+                States:
+                  NotificarEntregado:
+                    Type: Task
+                    Resource: arn:aws:states:::events:putEvents
+                    Parameters:
+                      Entries:
+                        - Source: delivery.service
+                          DetailType: NotificacionPedido
+                          Detail:
+                            tipo: PedidoEntregado
+                            orderId.$: $.detail.orderId
+                            sucursalId.$: $.detail.sucursalId
+                            customerId.$: $.detail.customerId
+                            status: Entregado
+                            mensaje: Pedido entregado
+                            confirmationCode.$: $.detail.confirmationCode
+                            timestamp.$: $$.State.EnteredTime
+                          EventBusName: !Ref EventBusName
+                    End: true
+            End: true
+          
+          ErrorNoHayCocineros:
+            Type: Fail
+            Error: NoCocinerosDisponibles
+            Cause: No hay cocineros activos disponibles
+          
+          ErrorNoHayDespachadores:
+            Type: Fail
+            Error: NoDespachadoresDisponibles
+            Cause: No hay despachadores activos disponibles
+          
+          ErrorNoHayRepartidores:
+            Type: Fail
+            Error: NoRepartidoresDisponibles
+            Cause: No hay repartidores activos disponibles
+          
+          EventoNoReconocido:
+            Type: Pass
+            End: true
+
+  # IAM Role for Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt PedidosTable.Arn
+                  - !Sub 
+                    - '${TableArn}/index/*'
+                    - TableArn: !GetAtt PedidosTable.Arn
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Usuarios'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Usuarios/index/*'
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+
+  # EventBridge Rules
+  PagoConfirmadoRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: delivery-pago-confirmado-rule
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - pagos.service
+        detail-type:
+          - PagoConfirmado
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DeliveryStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: delivery-state-machine
+
+  ComidaPreparadaRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: delivery-comida-preparada-rule
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - inventario.service
+        detail-type:
+          - ComidaPreparada
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DeliveryStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: delivery-state-machine
+
+  DespachadoRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: delivery-despachado-rule
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - inventario.service
+        detail-type:
+          - Despachado
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DeliveryStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: delivery-state-machine
+
+  EntregadoRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: delivery-entregado-rule
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - delivery.api
+        detail-type:
+          - Entregado
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DeliveryStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: delivery-state-machine
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeStepFunctionsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !GetAtt DeliveryStateMachine.Arn
+
+Outputs:
+  StateMachineArn:
+    Value: !GetAtt DeliveryStateMachine.Arn
+    Export:
+      Name: DeliveryStateMachineArn
+  PedidosTableName:
+    Value: !Ref PedidosTable
+    Export:
+      Name: PedidosTableName
