@@ -170,9 +170,9 @@
                     }
                 },
                 {
-                    "StartAt": "PublicarEventoNotificacion",
+                    "StartAt": "Notificar: PublicarEvento",
                     "States": {
-                        "PublicarEventoNotificacion": {
+                        "Notificar: PublicarEvento": {
                             "Type": "Task",
                             "Comment": "Publica evento para módulo de Notificaciones",
                             "Resource": "arn:aws:states:::events:putEvents",
@@ -346,9 +346,9 @@
                     }
                 },
                 {
-                    "StartAt": "NotificarDespacho",
+                    "StartAt": "Notificar: AsignarRepartidor",
                     "States": {
-                        "NotificarDespacho": {
+                        "Notificar: AsignarRepartidor": {
                             "Type": "Task",
                             "Resource": "arn:aws:states:::events:putEvents",
                             "Arguments": {
@@ -521,9 +521,9 @@
                     }
                 },
                 {
-                    "StartAt": "NotificarEnCamino",
+                    "StartAt": "Notificar: PedidoEnCamino",
                     "States": {
-                        "NotificarEnCamino": {
+                        "Notificar: PedidoEnCamino": {
                             "Type": "Task",
                             "Resource": "arn:aws:states:::events:putEvents",
                             "Arguments": {
@@ -659,9 +659,9 @@
                     }
                 },
                 {
-                    "StartAt": "NotificarEntregado",
+                    "StartAt": "Notificar: PedidoEntregado",
                     "States": {
-                        "NotificarEntregado": {
+                        "Notificar: PedidoEntregado": {
                             "Type": "Task",
                             "Resource": "arn:aws:states:::events:putEvents",
                             "Arguments": {
