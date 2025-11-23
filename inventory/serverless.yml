@@ -1,8 +1,5 @@
 service: revisar-stock-service
 
-plugins:
-  - serverless-esbuild
-
 provider:
   name: aws
   runtime: nodejs18.x
@@ -45,15 +42,6 @@ functions:
 
 package:
   individually: true
-
-custom:
-  esbuild:
-    bundle: true
-    minify: false
-    sourcemap: true
-    target: node18
-    platform: node
-    concurrency: 4
 
 resources:
   Resources:
