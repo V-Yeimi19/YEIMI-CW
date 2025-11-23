@@ -14,7 +14,7 @@ functions:
   RevisarStock:
     handler: src/RevisarStock.handler
     memorySize: 512
-    timeout: 60
+    timeout: 30
     environment:
       TABLE_NAME: ${self:provider.environment.TABLE_NAME}
       EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
@@ -64,5 +64,190 @@ resources:
         StateMachineName: !Sub "${AWS::StackName}-ms-inventory"
         StateMachineType: STANDARD
         RoleArn: arn:aws:iam::530708554320:role/LabRole
-        DefinitionString: !Sub |
-          ${file(./ms-inventory.asl.json)}
+        DefinitionString: |
+          {
+            "Comment": "A description of my state machine",
+            "StartAt": "Choice",
+            "States": {
+              "Choice": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "Condition": "{% $states.input.detail.eventType = 'ObtenerProductos' %}",
+                    "Next": "Obtener Stock paginado"
+                  },
+                  {
+                    "Condition": "{% $states.input.detail.eventType = 'VerificarStock' %}",
+                    "Next": "Obtener Stock de los productos"
+                  },
+                  {
+                    "Condition": "{% $states.input.detail.eventType = 'PagoConfirmado' %}",
+                    "Next": "Pedido en preparación"
+                  },
+                  {
+                    "Condition": "{% $states.input.detail.eventType = 'PagoFallido' %}",
+                    "Next": "Devolver reserva"
+                  }
+                ]
+              },
+              "Devolver reserva": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+                "Arguments": {
+                  "TableName": "DB Inventario",
+                  "Key": {
+                    "productId": {
+                      "S": "{% $states.input.detail.productId %}"
+                    }
+                  },
+                  "UpdateExpression": "SET stock = stock + :reservedQty",
+                  "ExpressionAttributeValues": {
+                    ":reservedQty": {
+                      "N": "{% $states.input.detail.reservedQty %}"
+                    }
+                  },
+                  "ReturnValues": "UPDATED_NEW"
+                },
+                "Next": "Pedido cancelado"
+              },
+              "Obtener Stock paginado": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+                "Arguments": {
+                  "TableName": "DB Inventario",
+                  "IndexName.$": "{% $states.input.detail.indexName ? $states.input.detail.indexName : null %}",
+                  "KeyConditionExpression": "productType = :ptype",
+                  "ExpressionAttributeValues.$": "{% $merge({':ptype': {'S': $states.input.detail.productType}, ':zero': {'N': '0'}}) %}",
+                  "FilterExpression": "stock > :zero",
+                  "Limit": "{% $states.input.detail.limit ? $states.input.detail.limit : 50 %}",
+                  "ExclusiveStartKey.$": "{% $states.input.detail.exclusiveStartKey ? $states.input.detail.exclusiveStartKey : null %}"
+                },
+                "Next": "Notificar: Stock listado"
+              },
+              "Notificar: Stock listado": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+                "Arguments": {
+                  "Entries": [
+                    {
+                      "Detail": "{%  %}",
+                      "DetailType": "MyDetailType",
+                      "EventBusName": "MyEventBusName",
+                      "Source": "MySource"
+                    }
+                  ]
+                },
+                "End": true
+              },
+              "Obtener Stock de los productos": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:dynamodb:batchGetItem",
+                "Arguments": {
+                  "RequestItems": {
+                    "DB Inventario": {
+                      "Keys.$": "{% $states.input.detail.productIds ~> $map(function($id){ { 'productId': {'S': $id} } }) %}",
+                      "ProjectionExpression": "productId, stock, reserved"
+                    }
+                  }
+                },
+                "Next": "RevisarStock"
+              },
+              "RevisarStock": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::lambda:invoke",
+                "Arguments": {
+                  "FunctionName": "{% $states.input.detail.revisarStockLambdaArn ? $states.input.detail.revisarStockLambdaArn : '' %}",
+                  "Payload.$": "$"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": [
+                      "Lambda.ServiceException",
+                      "Lambda.AWSLambdaException",
+                      "Lambda.SdkClientException",
+                      "Lambda.TooManyRequestsException"
+                    ],
+                    "IntervalSeconds": 1,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 2,
+                    "JitterStrategy": "FULL"
+                  }
+                ],
+                "Next": "Choice (1)"
+              },
+              "Choice (1)": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "Condition": "{% $states.input.Payload.reserved = true %}",
+                    "Next": "StockReservado"
+                  },
+                  {
+                    "Condition": "{% $states.input.Payload.reserved = false %}",
+                    "Next": "Stock no disponible"
+                  }
+                ]
+              },
+              "Stock no disponible": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::events:putEvents",
+                "Arguments": {
+                  "Entries": [
+                    {
+                      "Detail": "{% $string($merge($states.input.Payload, { eventType: 'StockNoDisponible' })) %}",
+                      "DetailType": "StockNoDisponible",
+                      "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
+                      "Source": "inventario.microservicio"
+                    }
+                  ]
+                },
+                "End": true
+              },
+              "StockReservado": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::events:putEvents",
+                "Arguments": {
+                  "Entries": [
+                    {
+                      "Detail": "{% $string($merge($states.input.Payload, { eventType: 'StockReservado' })) %}",
+                      "DetailType": "StockReservado",
+                      "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
+                      "Source": "inventario.microservicio"
+                    }
+                  ]
+                },
+                "End": true
+              },
+              "Pedido en preparación": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::events:putEvents",
+                "Arguments": {
+                  "Entries": [
+                    {
+                      "Detail": "{% $string($merge($states.input, { eventType: 'PedidoEnPreparacion' })) %}",
+                      "DetailType": "PedidoEnPreparacion",
+                      "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
+                      "Source": "inventario.microservicio"
+                    }
+                  ]
+                },
+                "End": true
+              },
+              "Pedido cancelado": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::events:putEvents",
+                "Arguments": {
+                  "Entries": [
+                    {
+                      "Detail": "{% $unmarshall := function($m){\n  $reduce($keys($m), {}, function($acc,$k){\n    $v := $m[$k];\n    $t := $keys($v)[0];\n    $val := $t = 'N' ? $number($v.N) :\n            ($t = 'S' ? $v.S :\n            ($t = 'BOOL' ? $v.BOOL :\n            ($t = 'M' ? $unmarshall($v.M) :\n            ($t = 'L' ? $map($v.L, function($x){\n                $xType := $keys($x)[0];\n                $xType = 'M' ? $unmarshall($x.M) :\n                ($xType = 'N' ? $number($x.N) :\n                ($xType = 'S' ? $x.S : $x))\n              }) : null)))));\n    $merge([$acc, { ($k): $val }])\n  })\n};\n$source := $states.input.Attributes ? $unmarshall($states.input.Attributes) : ( $states.input.Payload ? ( $states.input.Payload.Attributes ? $unmarshall($states.input.Payload.Attributes) : $states.input.Payload ) : $states.input );\n$string($merge($source, { eventType: 'PedidoCancelado' })) %}",
+                      "DetailType": "PedidoCancelado",
+                      "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
+                      "Source": "inventario.microservicio"
+                    }
+                  ]
+                },
+                "End": true
+              }
+            },
+            "QueryLanguage": "JSONata"
+          }
