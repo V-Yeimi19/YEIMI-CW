@@ -14,7 +14,7 @@ functions:
   RevisarStock:
     handler: src/RevisarStock.handler
     memorySize: 512
-    timeout: 30
+    timeout: 30          # aumentado desde 30s para evitar timeout justo en HTTP API
     environment:
       TABLE_NAME: ${self:provider.environment.TABLE_NAME}
       EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
@@ -28,7 +28,6 @@ package:
 
 resources:
   Resources:
-
     DBInventarioTable:
       Type: AWS::DynamoDB::Table
       Properties:
