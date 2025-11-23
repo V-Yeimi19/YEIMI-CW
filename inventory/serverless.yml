@@ -5,33 +5,16 @@ provider:
   runtime: nodejs18.x
   region: us-east-1
   stage: dev
+  role: arn:aws:iam::530708554320:role/Labrole
   environment:
     TABLE_NAME: DB_Inventario
     EVENT_BUS_NAME: MyEventBusName
-  iam:
-    role:
-      statements:
-        - Effect: "Allow"
-          Action:
-            - "dynamodb:UpdateItem"
-            - "dynamodb:GetItem"
-            - "dynamodb:BatchGetItem"
-            - "dynamodb:Query"
-            - "dynamodb:TransactWriteItems"
-          Resource:
-            - "arn:aws:dynamodb:${self:provider.region}:530708554320:table/${self:provider.environment.TABLE_NAME}"
-            - "arn:aws:dynamodb:${self:provider.region}:530708554320:table/${self:provider.environment.TABLE_NAME}/index/*"
-        - Effect: "Allow"
-          Action:
-            - "events:PutEvents"
-          Resource:
-            - "arn:aws:events:${self:provider.region}:530708554320:event-bus/${self:provider.environment.EVENT_BUS_NAME}"
 
 functions:
   RevisarStock:
     handler: src/RevisarStock.handler
     memorySize: 512
-    timeout: 30
+    timeout: 60          # aumentado desde 30s para evitar timeout justo en HTTP API
     environment:
       TABLE_NAME: ${self:provider.environment.TABLE_NAME}
       EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
