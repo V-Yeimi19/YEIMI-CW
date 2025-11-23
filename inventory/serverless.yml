@@ -1,0 +1,88 @@
+service: revisar-stock-service
+frameworkVersion: "3"
+
+plugins:
+  - serverless-esbuild
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: dev
+  environment:
+    TABLE_NAME: DB_Inventario
+    EVENT_BUS_NAME: MyEventBusName
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - "dynamodb:UpdateItem"
+            - "dynamodb:GetItem"
+            - "dynamodb:BatchGetItem"
+            - "dynamodb:Query"
+            - "dynamodb:TransactWriteItems"
+          Resource:
+            - "arn:aws:dynamodb:${self:provider.region}:530708554320:table/${self:provider.environment.TABLE_NAME}"
+            - "arn:aws:dynamodb:${self:provider.region}:530708554320:table/${self:provider.environment.TABLE_NAME}/index/*"
+        - Effect: "Allow"
+          Action:
+            - "events:PutEvents"
+          Resource:
+            - "arn:aws:events:${self:provider.region}:530708554320:event-bus/${self:provider.environment.EVENT_BUS_NAME}"
+
+functions:
+  RevisarStock:
+    handler: src/RevisarStock.handler
+    memorySize: 512
+    timeout: 30
+    environment:
+      TABLE_NAME: ${self:provider.environment.TABLE_NAME}
+      EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
+    events:
+      - httpApi:
+          path: /revisar-stock
+          method: post
+
+package:
+  individually: true
+
+custom:
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    target: node18
+    platform: node
+    concurrency: 4
+
+resources:
+  Resources:
+    DBInventarioTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TABLE_NAME}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: producto_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: tipo_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: producto_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: tenant_index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: tipo_index
+            KeySchema:
+              - AttributeName: tipo_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL

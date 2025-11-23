@@ -15,7 +15,7 @@
                 },
                 {
                     "Condition": "{% $states.input.detail.eventType = 'PagoConfirmado' %}",
-                    "Next": "Notificar:"
+                    "Next": "Pedido en preparación"
                 },
                 {
                     "Condition": "{% $states.input.detail.eventType = 'PagoFallido' %}",
@@ -54,6 +54,21 @@
                 "FilterExpression": "stock > :zero",
                 "Limit": "{% $states.input.detail.limit ? $states.input.detail.limit : 50 %}",
                 "ExclusiveStartKey.$": "{% $states.input.detail.exclusiveStartKey ? $states.input.detail.exclusiveStartKey : null %}"
+            },
+            "Next": "Notificar: Stock listado"
+        },
+        "Notificar: Stock listado": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": "{%  %}",
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
             },
             "End": true
         },
@@ -136,7 +151,7 @@
             },
             "End": true
         },
-        "Notificar:": {
+        "Pedido en preparación": {
             "Type": "Task",
             "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
@@ -157,7 +172,7 @@
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": "{% $string($merge($states.input.Attributes ? $states.input.Attributes : $states.input, { eventType: 'PedidoCancelado' })) %}",
+                        "Detail": "{% $unmarshall := function($m){\n  $reduce($keys($m), {}, function($acc,$k){\n    $v := $m[$k];\n    $t := $keys($v)[0];\n    $val := $t = 'N' ? $number($v.N) :\n            ($t = 'S' ? $v.S :\n            ($t = 'BOOL' ? $v.BOOL :\n            ($t = 'M' ? $unmarshall($v.M) :\n            ($t = 'L' ? $map($v.L, function($x){\n                $xType := $keys($x)[0];\n                $xType = 'M' ? $unmarshall($x.M) :\n                ($xType = 'N' ? $number($x.N) :\n                ($xType = 'S' ? $x.S : $x))\n              }) : null)))));\n    $merge([$acc, { ($k): $val }])\n  })\n};\n$source := $states.input.Attributes ? $unmarshall($states.input.Attributes) : ( $states.input.Payload ? ( $states.input.Payload.Attributes ? $unmarshall($states.input.Payload.Attributes) : $states.input.Payload ) : $states.input );\n$string($merge($source, { eventType: 'PedidoCancelado' })) %}",
                         "DetailType": "PedidoCancelado",
                         "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
                         "Source": "inventario.microservicio"
