@@ -14,7 +14,7 @@ functions:
   RevisarStock:
     handler: src/RevisarStock.handler
     memorySize: 512
-    timeout: 60          # aumentado desde 30s para evitar timeout justo en HTTP API
+    timeout: 60
     environment:
       TABLE_NAME: ${self:provider.environment.TABLE_NAME}
       EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
@@ -28,6 +28,7 @@ package:
 
 resources:
   Resources:
+
     DBInventarioTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -56,3 +57,10 @@ resources:
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
+    MSInventoryStateMachine:
+      Type: AWS::StepFunctions::StateMachine
+      Properties:
+        StateMachineName: !Sub "${AWS::StackName}-ms-inventory"
+        StateMachineType: STANDARD
+        RoleArn: arn:aws:iam::530708554320:role/LabRole
+        DefinitionString: ${file(./ms-inventory.asl.json)}
