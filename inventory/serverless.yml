@@ -1,5 +1,4 @@
 service: revisar-stock-service
-frameworkVersion: "3"
 
 plugins:
   - serverless-esbuild
