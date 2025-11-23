@@ -5,7 +5,7 @@ provider:
   runtime: nodejs18.x
   region: us-east-1
   stage: dev
-  role: arn:aws:iam::530708554320:role/Labrole
+  role: arn:aws:iam::530708554320:role/LabRole
   environment:
     TABLE_NAME: DB_Inventario
     EVENT_BUS_NAME: MyEventBusName
