@@ -7,20 +7,200 @@
             "Choices": [
                 {
                     "Next": "Validar opciones",
-                    "Condition": "{% $['detail-type'] = 'ProductoAgregado' %}"
+                    "Condition": "{% $['detail-type'] = 'AgregarActualizarCarrito' %}"
                 },
                 {
                     "Next": "Obtener Ordenes (paginadas)",
-                    "Condition": "{% $['detail-type'] = 'ObtenerOrdenesPasadas' %}"
+                    "Condition": "{% $['detail-type'] = 'ObtenerHistorialPedidos' %}"
+                },
+                {
+                    "Next": "DynamoDB GetItem",
+                    "Condition": "{% $['detail-type'] = 'RealizarCheckout' %}"
+                },
+                {
+                    "Next": "DynamoDB GetItem (1)",
+                    "Condition": "{% $['detail-type'] = 'CancelarPedido' %}"
+                },
+                {
+                    "Next": "Eliminar Producto del Carrito",
+                    "Condition": "{% $['detail-type'] = 'EliminarCarrito' %}"
+                },
+                {
+                    "Next": "Vaciar Carrito",
+                    "Condition": "{% $['detail-type'] = 'VaciarCarrito' %}"
                 }
             ]
+        },
+        "Eliminar Producto del Carrito": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "Next": "EventBridge PutEvents (6)"
+        },
+        "EventBridge PutEvents (6)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "DynamoDB GetItem (1)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "Next": "Verificar estado cancelable"
+        },
+        "Verificar estado cancelable": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "DynamoDB UpdateItem"
+                }
+            ],
+            "Default": "EventBridge PutEvents (1)"
+        },
+        "DynamoDB UpdateItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                },
+                "UpdateExpression": "SET MyKey = :myValueRef",
+                "ExpressionAttributeValues": {
+                    ":myValueRef": {
+                        "S": "MyValue"
+                    }
+                }
+            },
+            "Next": "Paralelo"
+        },
+        "Paralelo": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "EventBridge PutEvents (4)",
+                    "States": {
+                        "EventBridge PutEvents (4)": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Detail": {
+                                            "Message": "Hello from Step Functions!",
+                                            "TaskToken": "{% $states.context.Task.Token %}"
+                                        },
+                                        "DetailType": "MyDetailType",
+                                        "EventBusName": "MyEventBusName",
+                                        "Source": "MySource"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "EventBridge PutEvents (5)",
+                    "States": {
+                        "EventBridge PutEvents (5)": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Detail": {
+                                            "Message": "Hello from Step Functions!",
+                                            "TaskToken": "{% $states.context.Task.Token %}"
+                                        },
+                                        "DetailType": "MyDetailType",
+                                        "EventBusName": "MyEventBusName",
+                                        "Source": "MySource"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
+            "End": true
+        },
+        "DynamoDB GetItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "Next": "Elección"
+        },
+        "Elección": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "EventBridge PutEvents (3)"
+                }
+            ],
+            "Default": "TransactWriteItems"
+        },
+        "EventBridge PutEvents (3)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
         },
         "Validar opciones": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Output": "{% $states.result.Payload %}",
             "Arguments": {
-                "FunctionName": "",
+                "FunctionName": "${validarOpcionesARN}",
                 "Payload": "{% $states.input %}"
             },
             "Retry": [
@@ -37,7 +217,7 @@
                     "JitterStrategy": "FULL"
                 }
             ],
-            "Next": "Agregar Pedido al Carrito",
+            "Next": "Agregar o actualizar Pedido al Carrito",
             "Catch": [
                 {
                     "ErrorEquals": [
@@ -47,11 +227,11 @@
                 }
             ]
         },
-        "Agregar Pedido al Carrito": {
+        "Agregar o actualizar Pedido al Carrito": {
             "Type": "Task",
             "Resource": "arn:aws:states:::dynamodb:updateItem",
             "Arguments": {
-                "TableName": "DB_Clientes",
+                "TableName": "DB_Usuarios",
                 "Key": {
                     "user_id": {
                         "S": "{% 'USER#' & $userId %}"
@@ -109,31 +289,94 @@
                 "ExclusiveStartKey": "{% $nextToken %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-            "Next": "Devolver las ordenes al cliente"
+            "Next": "EventBridge PutEvents"
         },
-        "Devolver las ordenes al cliente": {
+        "EventBridge PutEvents": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Output": "{% $states.result.Payload %}",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
             "Arguments": {
-                "FunctionName": "",
-                "Payload": "{% $states.input %}"
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
             },
-            "Retry": [
-                {
-                    "ErrorEquals": [
-                        "Lambda.ServiceException",
-                        "Lambda.AWSLambdaException",
-                        "Lambda.SdkClientException",
-                        "Lambda.TooManyRequestsException"
-                    ],
-                    "IntervalSeconds": 1,
-                    "MaxAttempts": 3,
-                    "BackoffRate": 2,
-                    "JitterStrategy": "FULL"
-                }
-            ],
             "End": true
+        },
+        "TransactWriteItems": {
+            "Type": "Task",
+            "Arguments": {
+                "TransactItems": [
+                    {}
+                ]
+            },
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:transactWriteItems",
+            "Next": "EventBridge PutEvents (2)"
+        },
+        "EventBridge PutEvents (2)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "EventBridge PutEvents (1)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Vaciar Carrito": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Arguments": {
+                "TableName": "DB_Usuarios",
+                "Key": {
+                    "user_id": {
+                        "S": "{% 'USER#' & $states.input.userId %}"
+                    },
+                    "entity_type": {
+                        "S": "CART"
+                    }
+                },
+                "UpdateExpression": "REMOVE items SET updatedAt = :now",
+                "ExpressionAttributeValues": {
+                    ":now": {
+                        "S": "{% $now() %}"
+                    }
+                },
+                "ReturnValues": "ALL_NEW"
+            },
+            "Next": "EventBridge PutEvents (6)"
         }
     },
     "QueryLanguage": "JSONata"

@@ -25,6 +25,14 @@
                     "Next": "Refresh TTL de conexion",
                     "Condition": "{% $['detail-type'] = 'Ping' %}",
                     "Comment": "Esta ruta sirve para hacer Pong y que reinicie el ttl de la conexion"
+                },
+                {
+                    "Next": "Conectar Conexion",
+                    "Condition": "{% $['detail-type'] = 'Connect' %}"
+                },
+                {
+                    "Next": "Desconectar Conexion",
+                    "Condition": "{% $['detail-type'] = 'Disconnect' %}"
                 }
             ]
         },
@@ -282,6 +290,32 @@
                         "Source": "MySource"
                     }
                 ]
+            },
+            "End": true
+        },
+        "Conectar Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Item": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "End": true
+        },
+        "Desconectar Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
             },
             "End": true
         }
