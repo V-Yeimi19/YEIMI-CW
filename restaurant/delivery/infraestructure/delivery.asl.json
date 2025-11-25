@@ -1,0 +1,715 @@
+{
+    "Comment": "Microservicio Delivery - Event-driven sin Lambdas",
+    "StartAt": "IdentificarTipoEvento",
+    "States": {
+        "IdentificarTipoEvento": {
+            "Type": "Choice",
+            "Comment": "Enruta segun el tipo de evento recibido",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input['detail-type'] = 'PagoConfirmado' %}",
+                    "Next": "BuscarCocineroDisponible"
+                },
+                {
+                    "Condition": "{% $states.input['detail-type'] = 'ComidaPreparada' %}",
+                    "Next": "BuscarDespachadorDisponible"
+                },
+                {
+                    "Condition": "{% $states.input['detail-type'] = 'Despachado' %}",
+                    "Next": "BuscarRepartidorDisponible"
+                },
+                {
+                    "Condition": "{% $states.input['detail-type'] = 'Entregado' %}",
+                    "Next": "ActualizarPedidoEntregado"
+                }
+            ],
+            "Default": "EventoNoReconocido"
+        },
+        "BuscarCocineroDisponible": {
+            "Type": "Task",
+            "Comment": "Busca un cocinero disponible usando GSI tenant_context + Role",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+            "Arguments": {
+                "TableName": "${UsuariosTable}",
+                "IndexName": "TenantRoleIndex",
+                "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
+                "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
+                "ExpressionAttributeNames": {
+                    "#role": "Role"
+                },
+                "ExpressionAttributeValues": {
+                    ":tenantContext": {
+                        "S": "{% 'TENANT#' & $states.input.detail.sucursalId %}"
+                    },
+                    ":role": {
+                        "S": "COCINERO"
+                    },
+                    ":activo": {
+                        "S": "\"activo\":true"
+                    }
+                },
+                "Limit": 1
+            },
+            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'cocinero': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Next": "ValidarCocineroEncontrado"
+        },
+        "ValidarCocineroEncontrado": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.cocinero != null %}",
+                    "Next": "AsignarCocineroAlPedido"
+                }
+            ],
+            "Default": "ErrorNoHayCocineros"
+        },
+        "AsignarCocineroAlPedido": {
+            "Type": "Task",
+            "Comment": "Crea registro con entity=EnPreparacion",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "${PedidosTable}",
+                "Item": {
+                    "pedido_id": {
+                        "S": "{% 'Pedido#' & $states.input.orderId %}"
+                    },
+                    "entity": {
+                        "S": "EnPreparacion"
+                    },
+                    "sucursal": {
+                        "S": "{% $states.input.sucursalId %}"
+                    },
+                    "estadoFecha": {
+                        "S": "{% 'EnPreparacion#' & $now() %}"
+                    },
+                    "Cliente": {
+                        "S": "{% $states.input.customerId %}"
+                    },
+                    "Estado": {
+                        "S": "EnPreparacion"
+                    },
+                    "DesEstado": {
+                        "S": "Pedido en preparación"
+                    },
+                    "Historial": {
+                        "L": [
+                            {
+                                "M": {
+                                    "estado": {
+                                        "S": "EnPreparacion"
+                                    },
+                                    "timestamp": {
+                                        "S": "{% $now() %}"
+                                    },
+                                    "actor": {
+                                        "S": "{% $states.input.cocinero.userId %}"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "atributos": {
+                        "S": "{% $string({'Asignado': $states.input.cocinero.userId, 'cocineroNombre': $states.input.cocinero.nombre}) %}"
+                    }
+                }
+            },
+            "Next": "PublicarEventoPreparacion"
+        },
+        "PublicarEventoPreparacion": {
+            "Type": "Parallel",
+            "Comment": "Publica eventos para Email y Notificaciones",
+            "Branches": [
+                {
+                    "StartAt": "EnviarEmailPreparacion",
+                    "States": {
+                        "EnviarEmailPreparacion": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Arguments": {
+                                "Source": "${SesFromEmail}",
+                                "Destination": {
+                                    "ToAddresses": [
+                                        "{% $states.input.customerEmail %}"
+                                    ]
+                                },
+                                "Message": {
+                                    "Subject": {
+                                        "Data": "Tu pedido está en preparación - China Wok"
+                                    },
+                                    "Body": {
+                                        "Html": {
+                                            "Data": "{% '<html><body><h2>¡Tu pedido está siendo preparado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al cocinero <strong>' & $states.input.cocinero.nombre & '</strong>.</p><p>Estado: <strong>EN PREPARACIÓN</strong></p><p>Gracias por tu preferencia.</p><p>China Wok</p></body></html>' %}"
+                                        }
+                                    }
+                                }
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 2,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Catch": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "Next": "EmailFallidoPreparacion"
+                                }
+                            ],
+                            "End": true
+                        },
+                        "EmailFallidoPreparacion": {
+                            "Type": "Pass",
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Notificar: PublicarEvento",
+                    "States": {
+                        "Notificar: PublicarEvento": {
+                            "Type": "Task",
+                            "Comment": "Publica evento para módulo de Notificaciones",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "delivery.service",
+                                        "DetailType": "NotificacionPedido",
+                                        "Detail": {
+                                            "tipo": "PedidoEnPreparacion",
+                                            "orderId": "{% $states.input.orderId %}",
+                                            "sucursalId": "{% $states.input.sucursalId %}",
+                                            "customerId": "{% $states.input.customerId %}",
+                                            "status": "EnPreparacion",
+                                            "mensaje": "{% 'Pedido asignado al cocinero ' & $states.input.cocinero.nombre %}",
+                                            "cocineroNombre": "{% $states.input.cocinero.nombre %}",
+                                            "timestamp": "{% $now() %}"
+                                        },
+                                        "EventBusName": "${EventBusName}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
+            "End": true
+        },
+        "BuscarDespachadorDisponible": {
+            "Type": "Task",
+            "Comment": "Busca despachador usando GSI",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+            "Arguments": {
+                "TableName": "${UsuariosTable}",
+                "IndexName": "TenantRoleIndex",
+                "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
+                "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
+                "ExpressionAttributeNames": {
+                    "#role": "Role"
+                },
+                "ExpressionAttributeValues": {
+                    ":tenantContext": {
+                        "S": "{% 'TENANT#' & $states.input.detail.sucursalId %}"
+                    },
+                    ":role": {
+                        "S": "DESPACHADOR"
+                    },
+                    ":activo": {
+                        "S": "\"activo\":true"
+                    }
+                },
+                "Limit": 1
+            },
+            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'cocineroId': $states.input.detail.cocineroId, 'despachador': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Next": "ValidarDespachadorEncontrado"
+        },
+        "ValidarDespachadorEncontrado": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.despachador != null %}",
+                    "Next": "AsignarDespachadorAlPedido"
+                }
+            ],
+            "Default": "ErrorNoHayDespachadores"
+        },
+        "AsignarDespachadorAlPedido": {
+            "Type": "Task",
+            "Comment": "Crea registro con entity=EnDespacho",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "${PedidosTable}",
+                "Item": {
+                    "pedido_id": {
+                        "S": "{% 'Pedido#' & $states.input.orderId %}"
+                    },
+                    "entity": {
+                        "S": "EnDespacho"
+                    },
+                    "sucursal": {
+                        "S": "{% $states.input.sucursalId %}"
+                    },
+                    "estadoFecha": {
+                        "S": "{% 'EnDespacho#' & $now() %}"
+                    },
+                    "Cliente": {
+                        "S": "{% $states.input.customerId %}"
+                    },
+                    "Estado": {
+                        "S": "EnDespacho"
+                    },
+                    "DesEstado": {
+                        "S": "Pedido siendo empacado"
+                    },
+                    "Historial": {
+                        "L": [
+                            {
+                                "M": {
+                                    "estado": {
+                                        "S": "EnDespacho"
+                                    },
+                                    "timestamp": {
+                                        "S": "{% $now() %}"
+                                    },
+                                    "actor": {
+                                        "S": "{% $states.input.despachador.userId %}"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "atributos": {
+                        "S": "{% $string({'Asignado': $states.input.despachador.userId, 'despachadorNombre': $states.input.despachador.nombre, 'cocineroId': $states.input.cocineroId}) %}"
+                    }
+                }
+            },
+            "Next": "PublicarEventoDespacho"
+        },
+        "PublicarEventoDespacho": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "EnviarEmailDespacho",
+                    "States": {
+                        "EnviarEmailDespacho": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Arguments": {
+                                "Source": "${SesFromEmail}",
+                                "Destination": {
+                                    "ToAddresses": [
+                                        "{% $states.input.customerEmail %}"
+                                    ]
+                                },
+                                "Message": {
+                                    "Subject": {
+                                        "Data": "Tu pedido está siendo empacado - China Wok"
+                                    },
+                                    "Body": {
+                                        "Html": {
+                                            "Data": "{% '<html><body><h2>¡Tu pedido está siendo empacado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al despachador <strong>' & $states.input.despachador.nombre & '</strong>.</p><p>Estado: <strong>EN DESPACHO</strong></p><p>Pronto estará listo para envío.</p><p>China Wok</p></body></html>' %}"
+                                        }
+                                    }
+                                }
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 2,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Catch": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "Next": "EmailFallido"
+                                }
+                            ],
+                            "End": true
+                        },
+                        "EmailFallido": {
+                            "Type": "Pass",
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Notificar: AsignarRepartidor",
+                    "States": {
+                        "Notificar: AsignarRepartidor": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "delivery.service",
+                                        "DetailType": "NotificacionPedido",
+                                        "Detail": {
+                                            "tipo": "PedidoEnDespacho",
+                                            "orderId": "{% $states.input.orderId %}",
+                                            "sucursalId": "{% $states.input.sucursalId %}",
+                                            "customerId": "{% $states.input.customerId %}",
+                                            "status": "EnDespacho",
+                                            "mensaje": "{% 'Pedido asignado al despachador ' & $states.input.despachador.nombre %}",
+                                            "despachadorNombre": "{% $states.input.despachador.nombre %}",
+                                            "timestamp": "{% $now() %}"
+                                        },
+                                        "EventBusName": "${EventBusName}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
+            "End": true
+        },
+        "BuscarRepartidorDisponible": {
+            "Type": "Task",
+            "Comment": "Busca repartidor usando GSI",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+            "Arguments": {
+                "TableName": "${UsuariosTable}",
+                "IndexName": "TenantRoleIndex",
+                "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
+                "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
+                "ExpressionAttributeNames": {
+                    "#role": "Role"
+                },
+                "ExpressionAttributeValues": {
+                    ":tenantContext": {
+                        "S": "{% 'TENANT#' & $states.input.detail.sucursalId %}"
+                    },
+                    ":role": {
+                        "S": "REPARTIDOR"
+                    },
+                    ":activo": {
+                        "S": "\"activo\":true"
+                    }
+                },
+                "Limit": 1
+            },
+            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'despachadorId': $states.input.detail.despachadorId, 'repartidor': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Next": "ValidarRepartidorEncontrado"
+        },
+        "ValidarRepartidorEncontrado": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.repartidor != null %}",
+                    "Next": "AsignarRepartidorAlPedido"
+                }
+            ],
+            "Default": "ErrorNoHayRepartidores"
+        },
+        "AsignarRepartidorAlPedido": {
+            "Type": "Task",
+            "Comment": "Crea registro con entity=EnCamino",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "${PedidosTable}",
+                "Item": {
+                    "pedido_id": {
+                        "S": "{% 'Pedido#' & $states.input.orderId %}"
+                    },
+                    "entity": {
+                        "S": "EnCamino"
+                    },
+                    "sucursal": {
+                        "S": "{% $states.input.sucursalId %}"
+                    },
+                    "estadoFecha": {
+                        "S": "{% 'EnCamino#' & $now() %}"
+                    },
+                    "Cliente": {
+                        "S": "{% $states.input.customerId %}"
+                    },
+                    "Estado": {
+                        "S": "EnCamino"
+                    },
+                    "DesEstado": {
+                        "S": "Pedido en camino"
+                    },
+                    "Historial": {
+                        "L": [
+                            {
+                                "M": {
+                                    "estado": {
+                                        "S": "EnCamino"
+                                    },
+                                    "timestamp": {
+                                        "S": "{% $now() %}"
+                                    },
+                                    "actor": {
+                                        "S": "{% $states.input.repartidor.userId %}"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "atributos": {
+                        "S": "{% $string({'Asignado': $states.input.repartidor.userId, 'repartidorNombre': $states.input.repartidor.nombre, 'despachadorId': $states.input.despachadorId}) %}"
+                    }
+                }
+            },
+            "Next": "PublicarEventoEnCamino"
+        },
+        "PublicarEventoEnCamino": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "EnviarEmailEnCamino",
+                    "States": {
+                        "EnviarEmailEnCamino": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Arguments": {
+                                "Source": "${SesFromEmail}",
+                                "Destination": {
+                                    "ToAddresses": [
+                                        "{% $states.input.customerEmail %}"
+                                    ]
+                                },
+                                "Message": {
+                                    "Subject": {
+                                        "Data": "¡Tu pedido está en camino! - China Wok"
+                                    },
+                                    "Body": {
+                                        "Html": {
+                                            "Data": "{% '<html><body><h2>¡Tu pedido está en camino!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al repartidor <strong>' & $states.input.repartidor.nombre & '</strong>.</p><p>Estado: <strong>EN CAMINO</strong></p><p>Llegará pronto a tu dirección.</p><p>China Wok</p></body></html>' %}"
+                                        }
+                                    }
+                                }
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 2,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Catch": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "Next": "EmailFallido"
+                                }
+                            ],
+                            "End": true
+                        },
+                        "EmailFallido": {
+                            "Type": "Pass",
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Notificar: PedidoEnCamino",
+                    "States": {
+                        "Notificar: PedidoEnCamino": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "delivery.service",
+                                        "DetailType": "NotificacionPedido",
+                                        "Detail": {
+                                            "tipo": "PedidoEnCamino",
+                                            "orderId": "{% $states.input.orderId %}",
+                                            "sucursalId": "{% $states.input.sucursalId %}",
+                                            "customerId": "{% $states.input.customerId %}",
+                                            "status": "EnCamino",
+                                            "mensaje": "{% 'Pedido asignado al repartidor ' & $states.input.repartidor.nombre %}",
+                                            "repartidorNombre": "{% $states.input.repartidor.nombre %}",
+                                            "timestamp": "{% $now() %}"
+                                        },
+                                        "EventBusName": "${EventBusName}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
+            "End": true
+        },
+        "ActualizarPedidoEntregado": {
+            "Type": "Task",
+            "Comment": "Crea registro con entity=Entregado",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "${PedidosTable}",
+                "Item": {
+                    "pedido_id": {
+                        "S": "{% 'Pedido#' & $states.input.detail.orderId %}"
+                    },
+                    "entity": {
+                        "S": "Entregado"
+                    },
+                    "sucursal": {
+                        "S": "{% $states.input.detail.sucursalId %}"
+                    },
+                    "estadoFecha": {
+                        "S": "{% 'Entregado#' & $now() %}"
+                    },
+                    "Cliente": {
+                        "S": "{% $states.input.detail.customerId %}"
+                    },
+                    "Estado": {
+                        "S": "Entregado"
+                    },
+                    "DesEstado": {
+                        "S": "Pedido entregado"
+                    },
+                    "Historial": {
+                        "L": [
+                            {
+                                "M": {
+                                    "estado": {
+                                        "S": "Entregado"
+                                    },
+                                    "timestamp": {
+                                        "S": "{% $now() %}"
+                                    },
+                                    "confirmationCode": {
+                                        "S": "{% $states.input.detail.confirmationCode %}"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "atributos": {
+                        "S": "{% $string({'confirmationCode': $states.input.detail.confirmationCode, 'deliveryTimestamp': $states.input.detail.deliveryTimestamp}) %}"
+                    }
+                }
+            },
+            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'confirmationCode': $states.input.detail.confirmationCode} %}",
+            "Next": "PublicarEventoEntregado"
+        },
+        "PublicarEventoEntregado": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "EnviarEmailEntregado",
+                    "States": {
+                        "EnviarEmailEntregado": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Arguments": {
+                                "Source": "${SesFromEmail}",
+                                "Destination": {
+                                    "ToAddresses": [
+                                        "{% $states.input.customerEmail %}"
+                                    ]
+                                },
+                                "Message": {
+                                    "Subject": {
+                                        "Data": "¡Pedido entregado exitosamente! - China Wok"
+                                    },
+                                    "Body": {
+                                        "Html": {
+                                            "Data": "{% '<html><body><h2>¡Tu pedido fue entregado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido entregado exitosamente.</p><p>Estado: <strong>ENTREGADO</strong></p><p>Código de confirmación: <strong>' & $states.input.confirmationCode & '</strong></p><p>¡Gracias por tu preferencia!</p><p>China Wok</p></body></html>' %}"
+                                        }
+                                    }
+                                }
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 2,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Catch": [
+                                {
+                                    "ErrorEquals": [
+                                        "States.ALL"
+                                    ],
+                                    "Next": "EmailFallido"
+                                }
+                            ],
+                            "End": true
+                        },
+                        "EmailFallido": {
+                            "Type": "Pass",
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Notificar: PedidoEntregado",
+                    "States": {
+                        "Notificar: PedidoEntregado": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "delivery.service",
+                                        "DetailType": "NotificacionPedido",
+                                        "Detail": {
+                                            "tipo": "PedidoEntregado",
+                                            "orderId": "{% $states.input.orderId %}",
+                                            "sucursalId": "{% $states.input.sucursalId %}",
+                                            "customerId": "{% $states.input.customerId %}",
+                                            "status": "Entregado",
+                                            "mensaje": "Pedido entregado exitosamente",
+                                            "confirmationCode": "{% $states.input.confirmationCode %}",
+                                            "timestamp": "{% $now() %}"
+                                        },
+                                        "EventBusName": "${EventBusName}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
+            "End": true
+        },
+        "ErrorNoHayCocineros": {
+            "Type": "Fail",
+            "Error": "NoCocinerosDisponibles",
+            "Cause": "No hay cocineros activos disponibles en la sucursal"
+        },
+        "ErrorNoHayDespachadores": {
+            "Type": "Fail",
+            "Error": "NoDespachadoresDisponibles",
+            "Cause": "No hay despachadores activos disponibles en la sucursal"
+        },
+        "ErrorNoHayRepartidores": {
+            "Type": "Fail",
+            "Error": "NoRepartidoresDisponibles",
+            "Cause": "No hay repartidores activos disponibles en la sucursal"
+        },
+        "EventoNoReconocido": {
+            "Type": "Pass",
+            "Comment": "Evento no reconocido - se ignora",
+            "End": true
+        }
+    },
+    "QueryLanguage": "JSONata"
+}

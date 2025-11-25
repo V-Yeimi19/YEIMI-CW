@@ -1,0 +1,58 @@
+service: revisar-stock-service
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: dev
+  role: arn:aws:iam::530708554320:role/LabRole
+  environment:
+    TABLE_NAME: DB_Inventario
+    EVENT_BUS_NAME: MyEventBusName
+
+functions:
+  RevisarStock:
+    handler: src/RevisarStock.handler
+    memorySize: 512
+    timeout: 30          # aumentado desde 30s para evitar timeout justo en HTTP API
+    environment:
+      TABLE_NAME: ${self:provider.environment.TABLE_NAME}
+      EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
+    events:
+      - httpApi:
+          path: /revisar-stock
+          method: post
+
+package:
+  individually: true
+
+resources:
+  Resources:
+    DBInventarioTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TABLE_NAME}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: producto_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: tipo_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: producto_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: tenant_index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: tipo_index
+            KeySchema:
+              - AttributeName: tipo_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
