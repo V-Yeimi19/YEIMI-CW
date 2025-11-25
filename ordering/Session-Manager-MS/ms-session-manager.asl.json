@@ -1,0 +1,324 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "Selector de Evento",
+    "States": {
+        "Selector de Evento": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "Login Cliente",
+                    "Condition": "{% $['detail-type'] = 'LoginCliente' %}"
+                },
+                {
+                    "Next": "Login Manager",
+                    "Condition": "{% $['detail-type'] = 'LoginManagerAdmin' %}"
+                },
+                {
+                    "Next": "Registrar Cliente",
+                    "Condition": "{% $['detail-type'] = 'RegisterCliente' %}"
+                },
+                {
+                    "Condition": "{% $['detail-type'] = 'RegisterManager' %}",
+                    "Next": "Registrar Managers"
+                },
+                {
+                    "Next": "Refresh TTL de conexion",
+                    "Condition": "{% $['detail-type'] = 'Ping' %}",
+                    "Comment": "Esta ruta sirve para hacer Pong y que reinicie el ttl de la conexion"
+                },
+                {
+                    "Next": "Conectar Conexion",
+                    "Condition": "{% $['detail-type'] = 'Connect' %}"
+                },
+                {
+                    "Next": "Desconectar Conexion",
+                    "Condition": "{% $['detail-type'] = 'Disconnect' %}"
+                }
+            ]
+        },
+        "Registrar Managers": {
+            "Type": "Task",
+            "Arguments": {
+                "ClientId": "{% Con serverless %}",
+                "Username": "{% $client.gmail %}",
+                "Password": "{% $client.password %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
+            "Next": "Agregar a grupo de Managers"
+        },
+        "Agregar a grupo de Managers": {
+            "Type": "Task",
+            "Arguments": {
+                "GroupName": "Managers",
+                "UserPoolId": "{% con serverless %}",
+                "Username": "{% $client.gmail %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminAddUserToGroup",
+            "Next": "Notificar: ManagerRegistrado"
+        },
+        "Notificar: ManagerRegistrado": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Login Cliente": {
+            "Type": "Task",
+            "Arguments": {
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": {
+                    "USERNAME": "{% $client.gmail\n %}",
+                    "PASSWORD": "{% $client.password %}"
+                },
+                "ClientId": "{% obtener con serverless %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:initiateAuth",
+            "Comment": "Requiere parametro de serverless (argumentos)",
+            "Next": "Verificar Rol Cliente"
+        },
+        "Verificar Rol Cliente": {
+            "Type": "Task",
+            "Arguments": {
+                "UserPoolId": "{% inyectado con serverless %}",
+                "Username": "{% $client.email %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminListGroupsForUser",
+            "Next": "Es Cliente?"
+        },
+        "Es Cliente?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "Agregar Rol Cliente a Conexion",
+                    "Condition": "{% Si es cliente %}"
+                }
+            ],
+            "Default": "Notificar: Login Fallido"
+        },
+        "Agregar Rol Cliente a Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                },
+                "UpdateExpression": "SET MyKey = :myValueRef",
+                "ExpressionAttributeValues": {
+                    ":myValueRef": {
+                        "S": "MyValue"
+                    }
+                }
+            },
+            "Next": "Notificar: Login Exitoso"
+        },
+        "Notificar: Login Fallido": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Login Manager": {
+            "Type": "Task",
+            "Arguments": {
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": {
+                    "USERNAME": "{% $client.gmail\n %}",
+                    "PASSWORD": "{% $client.password %}"
+                },
+                "ClientId": "{% obtener con serverless %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:initiateAuth",
+            "Comment": "Requiere parametro de serverless (argumentos)",
+            "Next": "Verificar Rol Manager o ADMIN"
+        },
+        "Verificar Rol Manager o ADMIN": {
+            "Type": "Task",
+            "Arguments": {
+                "UserPoolId": "{% inyectado con serverless %}",
+                "Username": "{% $client.email %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminListGroupsForUser",
+            "Next": "Es Manager o Admin?"
+        },
+        "Es Manager o Admin?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "Agregar Rol Manager o Admin a Conexion",
+                    "Condition": "{% es Manager o Admin %}"
+                }
+            ],
+            "Default": "Notificar: Login Fallido"
+        },
+        "Agregar Rol Manager o Admin a Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                },
+                "UpdateExpression": "SET MyKey = :myValueRef",
+                "ExpressionAttributeValues": {
+                    ":myValueRef": {
+                        "S": "MyValue"
+                    }
+                }
+            },
+            "Next": "Notificar: Login Exitoso"
+        },
+        "Notificar: Login Exitoso": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Registrar Cliente": {
+            "Type": "Task",
+            "Arguments": {
+                "ClientId": "{% Con serverless %}",
+                "Username": "{% $client.gmail %}",
+                "Password": "{% $client.password %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
+            "Next": "Agregar a Grupo de Clientes"
+        },
+        "Agregar a Grupo de Clientes": {
+            "Type": "Task",
+            "Arguments": {
+                "GroupName": "Clientes",
+                "UserPoolId": "{% con serverless %}",
+                "Username": "{% $client.gmail %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminAddUserToGroup",
+            "Next": "Notificar: ClienteRegistrado"
+        },
+        "Notificar: ClienteRegistrado": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Refresh TTL de conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Arguments": {
+                "TableName": "DB_Conexiones",
+                "Key": {
+                    "connection_id": {
+                        "S": "$states.input.connection_id"
+                    }
+                },
+                "UpdateExpression": "SET #t = :newTTL",
+                "ExpressionAttributeNames": {
+                    "#t": "ttl"
+                },
+                "ExpressionAttributeValues": {
+                    ":newTTL": {
+                        "N": "$string($floor(($toMillis($now()) + 7200000) / 1000))"
+                    }
+                },
+                "ConditionExpression": "attribute_exists(connection_id)"
+            },
+            "Next": "Pong!"
+        },
+        "Pong!": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Detail": {
+                            "Message": "Hello from Step Functions!",
+                            "TaskToken": "{% $states.context.Task.Token %}"
+                        },
+                        "DetailType": "MyDetailType",
+                        "EventBusName": "MyEventBusName",
+                        "Source": "MySource"
+                    }
+                ]
+            },
+            "End": true
+        },
+        "Conectar Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Item": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "End": true
+        },
+        "Desconectar Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Arguments": {
+                "TableName": "MyDynamoDBTable",
+                "Key": {
+                    "Column": {
+                        "S": "MyEntry"
+                    }
+                }
+            },
+            "End": true
+        }
+    },
+    "QueryLanguage": "JSONata"
+}
