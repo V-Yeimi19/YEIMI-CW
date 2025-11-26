@@ -1,5 +1,5 @@
 # 1. NOMBRE ÚNICO DEL SERVICIO
-service: inventory-ms
+service: session-manager-ms
 
 # 2. CARGA DE CONFIGURACIÓN EXTERNA
 custom:

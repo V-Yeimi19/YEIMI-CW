@@ -1,0 +1,71 @@
+service: cw-infra-shared
+
+provider:
+  name: aws
+  region: us-east-1
+  stage: dev
+
+plugins:
+  - serverless-dotenv-plugin # Por si acaso
+
+custom:
+  dotenv:
+    path: ./.env
+
+Parameters:
+  EventBusName:
+    Type: String
+    Default: china-wok-event-bus
+    Description: Nombre del Event Bus
+  SesFromEmail:
+    Type: String
+    Description: Email verificado en SES para enviar notificaciones
+    Default: notificaciones@chinawok.com
+
+resources:
+  Resources:
+    # 1. El Bus de Eventos Principal
+    CentralEventBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: cw-event-bus
+
+    PedidosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: Pedidos
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: pedido_id
+            AttributeType: S
+          - AttributeName: entity
+            AttributeType: S
+          - AttributeName: sucursal
+            AttributeType: S
+          - AttributeName: estadoFecha
+            AttributeType: S
+        KeySchema:
+          - AttributeName: pedido_id
+            KeyType: HASH
+          - AttributeName: entity
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: SucursalIndex
+            KeySchema:
+              - AttributeName: sucursal
+                KeyType: HASH
+              - AttributeName: estadoFecha
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+  # 2. Exportamos los valores para que los microservicios los lean
+  Outputs:
+    BusNameExport:
+      Value: !Ref CentralEventBus
+      Export:
+        Name: ${self:service}-${self:provider.stage}-BusName
+    BusArnExport:
+      Value: !GetAtt CentralEventBus.Arn
+      Export:
+        Name: ${self:service}-${self:provider.stage}-BusArn

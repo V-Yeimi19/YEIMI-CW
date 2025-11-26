@@ -1,0 +1,57 @@
+{
+  "name": "cw-backend-microservices",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "ordering/Order-MS",
+    "ordering/Payment-MS",
+    "ordering/Session-Manager-MS",
+    "restaurant/delivery",
+    "restaurant/inventory",
+    "shared"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "// --- NIVEL 1: INFRAESTRUCTURA BASE ---": "",
+    "deploy:infra": "sls deploy",
+    "remove:infra": "sls remove",
+    "// --- NIVEL 2: SERVICIOS COMPARTIDOS (SHARED) ---": "",
+    "deploy:shared:notifications": "cd shared/notifications && sls deploy",
+    "remove:shared:notifications": "cd shared/notifications && sls remove",
+    "// --- NIVEL 3: DOMINIO ORDERING (INDIVIDUALES) ---": "",
+    "deploy:ordering:order": "cd ordering/Order-MS && sls deploy",
+    "remove:ordering:order": "cd ordering/Order-MS && sls remove",
+    "deploy:ordering:payment": "cd ordering/Payment-MS && sls deploy",
+    "remove:ordering:payment": "cd ordering/Payment-MS && sls remove",
+    "deploy:ordering:session": "cd ordering/Session-Manager-MS && sls deploy",
+    "remove:ordering:session": "cd ordering/Session-Manager-MS && sls remove",
+    "// --- NIVEL 4: DOMINIO RESTAURANT (INDIVIDUALES) ---": "",
+    "deploy:restaurant:delivery": "cd restaurant/delivery && sls deploy",
+    "remove:restaurant:delivery": "cd restaurant/delivery && sls remove",
+    "deploy:restaurant:inventory": "cd restaurant/inventory && sls deploy",
+    "remove:restaurant:inventory": "cd restaurant/inventory && sls remove",
+    "// --- NIVEL 5: GRUPOS POR DOMINIO (CADENA) ---": "",
+    "deploy:ordering": "npm run deploy:ordering:order && npm run deploy:ordering:payment && npm run deploy:ordering:session",
+    "remove:ordering": "npm run remove:ordering:session && npm run remove:ordering:payment && npm run remove:ordering:order",
+    "deploy:restaurant": "npm run deploy:restaurant:delivery && npm run deploy:restaurant:inventory",
+    "remove:restaurant": "npm run remove:restaurant:inventory && npm run remove:restaurant:delivery",
+    "// --- NIVEL 6: DESPLIEGUE GLOBAL (BIG BANG) ---": "",
+    "deploy:all": "npm run deploy:infra && npm run deploy:shared:notifications && npm run deploy:ordering && npm run deploy:restaurant",
+    "// NOTA: El remove all se hace en orden inverso para evitar dependencias rotas": "",
+    "remove:all": "npm run remove:restaurant && npm run remove:ordering && npm run remove:shared:notifications && npm run remove:infra"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.130",
+    "@types/node": "^20.10.0",
+    "esbuild": "^0.20.0",
+    "serverless": "^3.38.0",
+    "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-esbuild": "^1.50.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "aws-lambda": "^1.0.7",
+    "uuid": "^9.0.1"
+  }
+}

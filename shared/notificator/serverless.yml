@@ -1,0 +1,38 @@
+service: cw-notifications-service
+
+custom:
+  # Sube un nivel para encontrar common.yml dentro de shared
+  common: ${file(../common.yml)} 
+  dotenv:
+    path: ../../.env # Sube dos niveles para ir a la raíz del proyecto
+  esbuild: ${self:custom.common.custom.esbuild}
+
+plugins:
+  - serverless-esbuild
+  - serverless-dotenv-plugin
+
+provider:
+  # Hereda todo normal
+  name: ${self:custom.common.provider.name}
+  runtime: ${self:custom.common.provider.runtime}
+  region: ${self:custom.common.provider.region}
+  stage: ${self:custom.common.provider.stage}
+  role: ${self:custom.common.provider.role}
+  environment: ${self:custom.common.provider.environment}
+
+functions:
+  notificationHandler:
+    # Ahora el handler vive dentro de esta carpeta notifications/src
+    handler: src/lambda/NotificarObjetivo.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [NotificationQueue, Arn]
+
+resources:
+  Resources:
+    NotificationQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: cw-notification-queue
+    # ... Tus reglas de EventBridge ...

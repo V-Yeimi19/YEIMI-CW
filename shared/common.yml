@@ -1,0 +1,27 @@
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: dev
+  memorySize: 2048
+  timeout: 29
+  
+  # Construcción dinámica del ARN del Rol usando el .env
+  role: arn:aws:iam::${env:AWS_ACCOUNT_ID}:role/LabRole
+
+  environment:
+    # Variable global disponible para todos los MS
+    EVENT_BUS_NAME: ${cf:cw-infra-shared-dev.BusNameExport}
+    NODE_OPTIONS: --enable-source-maps
+
+# Configuración centralizada de Esbuild
+custom:
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    target: 'node18'
+    packager: 'npm'
+    # Importante: Como el tsconfig está dentro de cada MS, usamos ./tsconfig.json
+    tsconfig: './tsconfig.json'
+    exclude: ['aws-sdk', '@aws-sdk/*']

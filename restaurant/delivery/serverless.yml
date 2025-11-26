@@ -1,5 +1,5 @@
 # 1. NOMBRE ÚNICO DEL SERVICIO
-service: inventory-ms
+service: delivery-ms 
 
 # 2. CARGA DE CONFIGURACIÓN EXTERNA
 custom:
@@ -35,3 +35,4 @@ provider:
   environment: ${self:custom.common.provider.environment}
 
 # 5. Insfractructura especifica del servicio
+  
