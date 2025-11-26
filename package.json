@@ -41,7 +41,7 @@
     "remove:all": "npm run remove:restaurant && npm run remove:ordering && npm run remove:shared:notifications && npm run remove:infra"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.130",
+    "@types/aws-lambda": "^8.10.159",
     "@types/node": "^20.10.0",
     "esbuild": "^0.20.0",
     "serverless": "^3.38.0",

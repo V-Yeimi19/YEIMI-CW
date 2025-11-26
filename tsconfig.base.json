@@ -21,6 +21,7 @@
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
         "strict": true,
+        "noEmit": true,
         "noImplicitAny": true
     },
     "exclude": [
