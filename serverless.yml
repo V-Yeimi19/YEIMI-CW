@@ -61,11 +61,31 @@ resources:
 
   # 2. Exportamos los valores para que los microservicios los lean
   Outputs:
+    # 1. Exportamos la URL base del WebSocket
+    WebSocketEndpointUrl:
+      Description: "URL del WebSocket API para enviar respuestas (PostToConnection)"
+      # Construimos la URL: https://{API_ID}.execute-api.{REGION}.amazonaws.com/{STAGE}
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: WebsocketsApi  # Referencia automática al API creado por Serverless
+            - ".execute-api."
+            - Ref: "AWS::Region"
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+      
+      # 2. Le damos un nombre único para importarlo después
+      Export:
+        Name: cw-websocket-endpoint-${self:provider.stage}
+
     BusNameExport:
       Value: !Ref CentralEventBus
       Export:
         Name: ${self:service}-${self:provider.stage}-BusName
+        
     BusArnExport:
       Value: !GetAtt CentralEventBus.Arn
       Export:
         Name: ${self:service}-${self:provider.stage}-BusArn
+        
