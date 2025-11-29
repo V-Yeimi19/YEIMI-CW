@@ -59,6 +59,36 @@ resources:
             Projection:
               ProjectionType: ALL
 
+    # Tabla de Usuarios 
+    UsuariosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: Usuarios-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: entity_type
+            AttributeType: S
+          - AttributeName: tenant_context
+            AttributeType: S
+          - AttributeName: Role
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: entity_type
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: TenantRoleIndex
+            KeySchema:
+              - AttributeName: tenant_context
+                KeyType: HASH
+              - AttributeName: Role
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
   # 2. Exportamos los valores para que los microservicios los lean
   Outputs:
     BusNameExport:
@@ -69,3 +99,19 @@ resources:
       Value: !GetAtt CentralEventBus.Arn
       Export:
         Name: ${self:service}-${self:provider.stage}-BusArn
+    PedidosTableName:
+      Value: !Ref PedidosTable
+      Export:
+        Name: ${self:service}-${self:provider.stage}-PedidosTableName
+    PedidosTableArn:
+      Value: !GetAtt PedidosTable.Arn
+      Export:
+        Name: ${self:service}-${self:provider.stage}-PedidosTableArn
+    UsuariosTableName:
+        Value: !Ref UsuariosTable
+        Export:
+          Name: ${self:service}-${self:provider.stage}-UsuariosTableName
+    UsuariosTableArn:
+        Value: !GetAtt UsuariosTable.Arn
+        Export:
+          Name: ${self:service}-${self:provider.stage}-UsuariosTableArn

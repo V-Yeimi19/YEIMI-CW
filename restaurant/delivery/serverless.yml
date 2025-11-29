@@ -35,4 +35,87 @@ provider:
   environment: ${self:custom.common.provider.environment}
 
 # 5. Insfractructura especifica del servicio
-  
+resources:
+  Resources:
+    # Step Function del Delivery
+    DeliveryStateMachine:
+      Type: AWS::StepFunctions::StateMachine
+      Properties:
+        StateMachineName: DeliveryStateMachine-${self:provider.stage}
+        RoleArn: ${self:custom.common.provider.role}
+        DefinitionString:
+          Fn::Sub:
+            - |-
+              ${FileContent}
+            - FileContent: ${file(./delivery.asl.json)}
+              UsuariosTable: ${cf:cw-infra-shared-dev.UsuariosTableName}
+              PedidosTable: ${cf:cw-infra-shared-dev.PedidosTableName}
+              EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+              SesFromEmail: ${param:SesFromEmail, 'notificaciones@chinawok.com'}
+
+    # Reglas de EventBridge para invocar la Step Function
+    PagoConfirmadoRule:
+      Type: AWS::Events::Rule
+      Properties:
+        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        EventPattern:
+          source:
+            - payment.service
+          detail-type:
+            - PagoConfirmado
+        State: ENABLED
+        Targets:
+          - Arn: !GetAtt DeliveryStateMachine.Arn
+            RoleArn: ${self:custom.common.provider.role}
+            Id: DeliveryStateMachineTarget
+
+    ComidaPreparadaRule:
+      Type: AWS::Events::Rule
+      Properties:
+        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        EventPattern:
+          source:
+            - kitchen.service
+          detail-type:
+            - ComidaPreparada
+        State: ENABLED
+        Targets:
+          - Arn: !GetAtt DeliveryStateMachine.Arn
+            RoleArn: ${self:custom.common.provider.role}
+            Id: DeliveryStateMachineTarget
+
+    DespachadoRule:
+      Type: AWS::Events::Rule
+      Properties:
+        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        EventPattern:
+          source:
+            - packing.service
+          detail-type:
+            - Despachado
+        State: ENABLED
+        Targets:
+          - Arn: !GetAtt DeliveryStateMachine.Arn
+            RoleArn: ${self:custom.common.provider.role}
+            Id: DeliveryStateMachineTarget
+
+    EntregadoRule:
+      Type: AWS::Events::Rule
+      Properties:
+        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        EventPattern:
+          source:
+            - driver.service
+          detail-type:
+            - Entregado
+        State: ENABLED
+        Targets:
+          - Arn: !GetAtt DeliveryStateMachine.Arn
+            RoleArn: ${self:custom.common.provider.role}
+            Id: DeliveryStateMachineTarget
+
+  Outputs:
+    DeliveryStateMachineArn:
+      Value: !GetAtt DeliveryStateMachine.Arn
+      Export:
+        Name: ${self:service}-${self:provider.stage}-StateMachineArn
