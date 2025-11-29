@@ -2,7 +2,7 @@ service: cw-notifications-service
 
 custom:
   # Sube un nivel para encontrar common.yml dentro de shared
-  common: ${file(../common.yml)} 
+  common: ${file(../common.yml)}
   dotenv:
     path: ../../.env # Sube dos niveles para ir a la raíz del proyecto
   esbuild: ${self:custom.common.custom.esbuild}
@@ -24,15 +24,90 @@ functions:
   notificationHandler:
     # Ahora el handler vive dentro de esta carpeta notifications/src
     handler: src/lambda/NotificarObjetivo.handler
+
+    # Esto significa: "Nunca levantes más de 50 copias de esta Lambda a la vez"
+    # - Si cada Lambda tarda aprox 100ms (0.1s) en ejecutarse (porque es solo red).
+    # - Y procesas 10 mensajes por lote (batchSize).
+    # - Con 50 de concurrencia:
+    #     50 lambdas * 10 mensajes = 500 mensajes simultáneos
+    # Como tardan 0.1s, podrías procesar teóricamente 5,000 notificaciones por segundo.
+    reservedConcurrency: 50
+
+    # Solo úsalo si tienes presupuesto y la latencia del "arranque en frío" es inaceptable
+    # provisionedConcurrency: 5
+
+    # 1. MEMORIA = VELOCIDAD DE RED
+    # En Lambda, más memoria = más CPU y ancho de banda.
+    # Para Websockets rápidos, necesitas handshake SSL rápido. 
+    # 1024MB o 1769MB (1 vCPU completa) es ideal para latencia baja.
+    memorySize: 2048
+
+    timeout: 10
     events:
       - sqs:
           arn:
             Fn::GetAtt: [NotificationQueue, Arn]
+          # 2. BATCH SIZE PEQUEÑO/MEDIANO
+          # No queremos esperar a llenar un bus grande.
+          # 10 es el default y está bien. Si llega 1, procesa 1. Si llegan 10, procesa 10.
+          batchSize: 10 
+          
+          # 3. VENTANA DE BATCHING EN CERO (CRÍTICO)
+          # Esto le dice a SQS: "No esperes ni un milisegundo a ver si llegan más".
+          # Dispara la Lambda tan pronto como haya un mensaje disponible.
+          maximumBatchingWindow: 0
+          
+          # 4. Mantenemos esto para manejar errores parciales sin re-procesar todo
+          # Si falla el mensaje 45 de 50, no reintentas los 50, solo el 45.
+          functionResponseType: ReportBatchItemFailures
 
 resources:
   Resources:
+    # 1. La Cola SQS que amortigua las notificaciones
     NotificationQueue:
       Type: AWS::SQS::Queue
       Properties:
         QueueName: cw-notification-queue
-    # ... Tus reglas de EventBridge ...
+        # Configuración opcional: Retención de mensajes (ej. 4 días)
+        MessageRetentionPeriod: 345600 
+
+    # 2. POLÍTICA DE PERMISOS (Vital)
+    # Sin esto, EventBridge intenta enviar el mensaje y falla silenciosamente
+    EventBridgeToSQSPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref NotificationQueue
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt NotificationQueue.Arn
+              # Seguridad: Solo permitimos que TU bus escriba aquí
+              Condition:
+                ArnEquals:
+                  "aws:SourceArn": ${cf:cw-infra-shared-${self:provider.stage}.BusArnExport}
+    
+    # 3. La Regla de EventBridge (El Filtro Inteligente)
+    NotificationRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Description: "Captura cualquier evento marcado con scope NOTIFICATION"
+        # Referencia al Bus Central creado en el stack raíz
+        EventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+        State: ENABLED
+        
+        # AQUÍ ESTÁ LA MAGIA:
+        # No nos importa el 'Source' ni el 'DetailType'.
+        # Solo nos importa que dentro de detail -> meta -> scope diga "NOTIFICATION"
+        EventPattern:
+          detail:
+            meta:
+              scope:
+                - "NOTIFICATION"
+        
+        Targets:
+          - Id: SendToNotificationQueue
+            Arn: !GetAtt NotificationQueue.Arn

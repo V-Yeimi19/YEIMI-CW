@@ -2,34 +2,66 @@ service: cw-infra-shared
 
 provider:
   name: aws
+  runtime: nodejs18.x
   region: us-east-1
   stage: dev
+  environment:
+    CONNECTIONS_TABLE: !Ref ConnectionsTable
+    EVENT_BUS_NAME: !Ref CentralEventBus
+    # Configuración para Powertools y Node
+    POWERTOOLS_SERVICE_NAME: WebSocketService
+    NODE_OPTIONS: --enable-source-maps
+  
+  role: arn:aws:iam::${env:AWS_ACCOUNT_ID}:role/LabRole
 
 plugins:
+  - serverless-esbuild
   - serverless-dotenv-plugin # Por si acaso
 
 custom:
   dotenv:
     path: ./.env
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    target: 'node18'
+    exclude: ['aws-sdk']
+    platform: 'node'
+    concurrency: 10
 
-Parameters:
-  EventBusName:
-    Type: String
-    Default: china-wok-event-bus
-    Description: Nombre del Event Bus
-  SesFromEmail:
-    Type: String
-    Description: Email verificado en SES para enviar notificaciones
-    Default: notificaciones@chinawok.com
+functions:
+  wsConnect:
+    handler: shared/src/lambdas/Connect.handler
+    events:
+      - websocket:
+          route: $connect
+
+  wsDisconnect:
+    handler: shared/src/lambdas/Disconnect.handler
+    events:
+      - websocket:
+          route: $disconnect
+
+  wsDefault:
+    handler: shared/src/lambdas/Default.handler
+    events:
+      - websocket:
+          route: $default
 
 resources:
   Resources:
-    # 1. El Bus de Eventos Principal
+    # ---------------------------------------------------
+    # BUS DE EVENTOS
+    # ---------------------------------------------------
     CentralEventBus:
       Type: AWS::Events::EventBus
       Properties:
         Name: cw-event-bus
 
+    # ---------------------------------------------------
+    # TABLA DE PEDIDOS
+    # ---------------------------------------------------
     PedidosTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -59,7 +91,55 @@ resources:
             Projection:
               ProjectionType: ALL
 
-    # Tabla de Usuarios 
+    # ---------------------------------------------------
+    # TABLA DE CONEXIONES WEBSOCKET
+    # ---------------------------------------------------
+    ConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        # Nombre físico: t_connections_dev, t_connections_prod, etc.
+        TableName: t_connections_${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        
+        # Definimos SOLO los atributos que son Keys o Índices
+        AttributeDefinitions:
+          - AttributeName: connection_id
+            AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+        
+        # Primary Key (PK)
+        KeySchema:
+          - AttributeName: connection_id
+            KeyType: HASH
+
+        # Configuración de TTL (Limpieza automática)
+        # Sigue la columna 'ttl' de tu imagen
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+
+        # Índices Secundarios Globales (GSI)
+        GlobalSecondaryIndexes:
+          # GSI 1: Para buscar por Usuario (Caso 2 y 3)
+          - IndexName: user_id-index
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+            # Proyectamos todo por si luego quieres filtrar por 'Role'
+            Projection:
+              ProjectionType: ALL
+
+          # GSI 2: Para buscar por Tenant/Sucursal (Caso 4)
+          - IndexName: tenant_id-index
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
     UsuariosTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -89,16 +169,41 @@ resources:
             Projection:
               ProjectionType: ALL
 
+
   # 2. Exportamos los valores para que los microservicios los lean
   Outputs:
+    # URL base del WebSocket
+    # NOTA: Al agregar la sección 'functions' con eventos websocket, 
+    # Serverless crea automágicamente el recurso lógico 'WebsocketsApi'.
+    # Por eso este Output ahora funcionará correctamente.
+    WebSocketEndpointUrl:
+      Description: "URL del WebSocket API para enviar respuestas (PostToConnection)"
+      # Construimos la URL: https://{API_ID}.execute-api.{REGION}.amazonaws.com/{STAGE}
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: WebsocketsApi  # Referencia automática al API creado por Serverless
+            - ".execute-api."
+            - Ref: "AWS::Region"
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+      Export:
+        Name: cw-websocket-endpoint-${self:provider.stage}
+
+    # NOMBRE de la Bus de Eventos
     BusNameExport:
       Value: !Ref CentralEventBus
       Export:
         Name: ${self:service}-${self:provider.stage}-BusName
+
+    # ARN de la Bus de Eventos
     BusArnExport:
       Value: !GetAtt CentralEventBus.Arn
       Export:
         Name: ${self:service}-${self:provider.stage}-BusArn
+
+
     PedidosTableName:
       Value: !Ref PedidosTable
       Export:
