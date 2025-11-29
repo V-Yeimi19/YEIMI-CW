@@ -8,14 +8,6 @@
         "module": "CommonJS",
         "rootDir": "./",
         "baseUrl": "./",
-        "paths": {
-            "@cw/shared": [
-                "shared/src/index.ts"
-            ],
-            "@cw/shared/*": [
-                "shared/src/*"
-            ]
-        },
         "allowSyntheticDefaultImports": true,
         "esModuleInterop": true,
         "skipLibCheck": true,

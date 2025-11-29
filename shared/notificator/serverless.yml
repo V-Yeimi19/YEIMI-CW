@@ -42,12 +42,6 @@ functions:
     # 1024MB o 1769MB (1 vCPU completa) es ideal para latencia baja.
     memorySize: 2048
 
-    # ENVIRONMENT VARIABLES
-    # Importamos la URL del WebSocket desde el stack raíz
-    environment:
-      WEBSOCKET_ENDPOINT: 
-        Fn::ImportValue: cw-websocket-endpoint-${self:provider.stage}
-
     timeout: 10
     events:
       - sqs:
