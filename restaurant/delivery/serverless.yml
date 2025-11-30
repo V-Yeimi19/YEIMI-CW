@@ -1,25 +1,24 @@
-# 1. NOMBRE ÚNICO DEL SERVICIO
 service: delivery-ms 
 
-# 2. CARGA DE CONFIGURACIÓN EXTERNA
-custom:
-  # Cargamos el archivo común de la raíz
-  common: ${file(../../shared/common.yml)}
+# CRÍTICO: dotenv-plugin DEBE ir PRIMERO
+plugins:
+  - serverless-dotenv-plugin
+  - serverless-esbuild
+
   
-  # Plugin dotenv: Lee el archivo .env de la raíz
+custom:
+  common: ${file(../../shared/common.yml)}
+
+  # CRÍTICO: dotenv DEBE estar configurado ANTES de usarse
   dotenv:
     path: ../../.env
-    logging: false
+    logging: true
+    required:
+      env:
+        - SENDGRID_API_KEY
 
-  # Heredamos la configuración de esbuild del archivo común
   esbuild: ${self:custom.common.custom.esbuild}
 
-# 3. PLUGINS (Se deben listar explícitamente en cada servicio)
-plugins:
-  - serverless-esbuild
-  - serverless-dotenv-plugin
-
-# 4. PROVIDER (Heredamos todo del common)
 provider:
   name: ${self:custom.common.provider.name}
   runtime: ${self:custom.common.provider.runtime}
@@ -28,44 +27,43 @@ provider:
   memorySize: ${self:custom.common.provider.memorySize}
   timeout: ${self:custom.common.provider.timeout}
 
-  # Heredamos el Rol dinámico (se resuelve con el .env cargado arriba)
-  role: ${self:custom.common.provider.role}
+  # Heredar la configuración de IAM (NO 'role' directamente)
+  iam: ${self:custom.common.provider.iam}
 
-  # Heredamos variables de entorno globales (EventBus, etc.)
   environment:
     EVENT_BUS_NAME: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
-    SENDGRID_API_KEY: ${env:SENDGRID_API_KEY}
-    FROM_EMAIL: ${param:FromEmail, 'notificaciones@chinawok.com'}
+    SENDGRID_API_KEY: ${.env:SENDGRID_API_KEY}
+    FROM_EMAIL: ${.env:FROM_EMAIL, 'notificaciones@chinawok.com'}
 
-# 5. Funciones Lambda
 functions:
   sendEmail:
     handler: src/sendEmail.handler
     description: Envía emails usando SendGrid API
     environment:
-      SENDGRID_API_KEY: ${env:SENDGRID_API_KEY}
-      FROM_EMAIL: ${param:FromEmail, 'notificaciones@chinawok.com'}
+      SENDGRID_API_KEY: ${.env:SENDGRID_API_KEY}
+      FROM_EMAIL: ${.env:FROM_EMAIL, 'notificaciones@chinawok.com'}
 
-# 6. Infraestructura especifica del servicio
 resources:
   Resources:
-    # Step Function del Delivery
     DeliveryStateMachine:
       Type: AWS::StepFunctions::StateMachine
       Properties:
         StateMachineName: DeliveryStateMachine-${self:provider.stage}
-        RoleArn: ${self:custom.common.provider.role}
+        # Usar Fn::Sub para obtener el AccountId dinámicamente
+        RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
         DefinitionString:
           Fn::Sub:
-            - |-
-              ${FileContent}
+            - ${FileContent}
             - FileContent: ${file(./delivery.asl.json)}
               UsuariosTable: ${cf:cw-infra-shared-dev.UsuariosTableName}
               PedidosTable: ${cf:cw-infra-shared-dev.PedidosTableName}
               EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
-              SendEmailLambdaArn: !GetAtt SendEmailLambdaFunction.Arn
+              SendEmailLambdaArn:
+                Fn::GetAtt:
+                  - SendEmailLambdaFunction
+                  - Arn
 
-    # Reglas de EventBridge para invocar la Step Function
+
     PagoConfirmadoRule:
       Type: AWS::Events::Rule
       Properties:
@@ -78,7 +76,7 @@ resources:
         State: ENABLED
         Targets:
           - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: ${self:custom.common.provider.role}
+            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
             Id: DeliveryStateMachineTarget
 
     ComidaPreparadaRule:
@@ -93,7 +91,7 @@ resources:
         State: ENABLED
         Targets:
           - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: ${self:custom.common.provider.role}
+            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
             Id: DeliveryStateMachineTarget
 
     DespachadoRule:
@@ -108,7 +106,7 @@ resources:
         State: ENABLED
         Targets:
           - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: ${self:custom.common.provider.role}
+            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
             Id: DeliveryStateMachineTarget
 
     EntregadoRule:
@@ -123,7 +121,7 @@ resources:
         State: ENABLED
         Targets:
           - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: ${self:custom.common.provider.role}
+            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
             Id: DeliveryStateMachineTarget
 
   Outputs:
