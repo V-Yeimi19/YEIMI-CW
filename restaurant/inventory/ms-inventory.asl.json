@@ -1,185 +1,155 @@
 {
-    "Comment": "A description of my state machine",
-    "StartAt": "Choice",
+    "Comment": "Microservicio de Inventario: Listado, Reserva y Devolución",
+    "StartAt": "Preparar Contexto",
     "States": {
-        "Choice": {
+        "Preparar Contexto": {
+            "Type": "Pass",
+            "Assign": {
+                "meta": "{% $states.input.detail.meta %}",
+                "inputData": "{% $states.input.detail.data %}",
+                "eventType": "{% $states.input['detail-type'] %}",
+                "taskToken": "{% $states.input.detail.data.myTaskToken %}"
+            },
+            "Next": "Router Eventos"
+        },
+        "Router Eventos": {
             "Type": "Choice",
             "Choices": [
                 {
-                    "Condition": "{% $states.input.detail.eventType = 'ObtenerProductos' %}",
+                    "Condition": "{% $states.input.detail.eventType = 'Productos.Listar' %}",
                     "Next": "Obtener Stock paginado"
                 },
                 {
-                    "Condition": "{% $states.input.detail.eventType = 'VerificarStock' %}",
-                    "Next": "Obtener Stock de los productos"
+                    "Condition": "{% $eventType = 'Stock.Verificar' %}",
+                    "Next": "Verificar y Reservar Stock"
                 },
                 {
-                    "Condition": "{% $states.input.detail.eventType = 'PagoConfirmado' %}",
-                    "Next": "Pedido en preparación"
+                    "Condition": "{% $eventType = 'Pago.Confirmado' %}",
+                    "Next": "State: Pedido en Preparacion"
                 },
                 {
-                    "Condition": "{% $states.input.detail.eventType = 'PagoFallido' %}",
-                    "Next": "Devolver reserva"
+                    "Condition": "{% $eventType = 'Pago.Fallido' %}",
+                    "Next": "Revertir Reserva (Rollback)"
+                },
+                {
+                    "Condition": "{% $eventType = 'Pedido.Cancelado' %}",
+                    "Next": "Revertir Reserva (Rollback)"
                 }
             ]
         },
-        "Devolver reserva": {
+        "Revertir Reserva (Rollback)": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
             "Arguments": {
-                "TableName": "DB Inventario",
-                "Key": {
-                    "productId": {
-                        "S": "{% $states.input.detail.productId %}"
-                    }
-                },
-                "UpdateExpression": "SET stock = stock + :reservedQty",
-                "ExpressionAttributeValues": {
-                    ":reservedQty": {
-                        "N": "{% $states.input.detail.reservedQty %}"
-                    }
-                },
-                "ReturnValues": "UPDATED_NEW"
+                "TransactItems": "{% $inputData.items ~> $map(function($item) {\n{\n  \"Update\": {\n    \"TableName\": \"${self:custom.InventoryTableName}\",\n    \"Key\": {\n      \"pk\": { \"S\": $item.tenantId },\n      \"sk\": { \"S\": $item.productSku }\n    },\n    \"UpdateExpression\": \"SET stock = stock + :qty\",\n    \"ExpressionAttributeValues\": {\n      \":qty\": { \"N\": $string($item.qty) }\n    }\n  }\n}\n}) %}"
             },
-            "Next": "Pedido cancelado"
+            "Comment": "Suma el stock de vuelta a todos los items.",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:transactWriteItems",
+            "Next": "Notificar: Pedido Cancelado",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "DynamoDB.TransactionCanceledException"
+                    ],
+                    "Next": "Error Critico: Fallo Reversion"
+                }
+            ]
         },
         "Obtener Stock paginado": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-            "Arguments": {
-                "TableName": "DB Inventario",
-                "IndexName.$": "{% $states.input.detail.indexName ? $states.input.detail.indexName : null %}",
-                "KeyConditionExpression": "productType = :ptype",
-                "ExpressionAttributeValues.$": "{% $merge({':ptype': {'S': $states.input.detail.productType}, ':zero': {'N': '0'}}) %}",
-                "FilterExpression": "stock > :zero",
-                "Limit": "{% $states.input.detail.limit ? $states.input.detail.limit : 50 %}",
-                "ExclusiveStartKey.$": "{% $states.input.detail.exclusiveStartKey ? $states.input.detail.exclusiveStartKey : null %}"
-            },
-            "Next": "Notificar: Stock listado"
+            "Arguments": "{% $merge([\n  { \n    \"TableName\": \"${self:custom.InventoryTableName}\", \n    \"IndexName\": \"productType-index\", \n    \"KeyConditionExpression\": \"productType = :ptype\", \n    \"FilterExpression\": \"stock > :zero\", \n    \"ExpressionAttributeValues\": { \n      \":ptype\": { \n        \"S\": $inputData.productType \n      }, \n      \":zero\": { \n        \"N\": \"0\"\n      } \n    }, \n    \"Limit\": ($inputData.limit ? $inputData.limit : 20) \n  }, \n  $inputData.nextPageKey ? { \n    \"ExclusiveStartKey\": $inputData.nextPageKey \n  } : {}\n]) %}",
+            "Next": "Notificar: Stock listado",
+            "Assign": {
+                "items": "{% $states.result.Items %}",
+                "lastKey": "{% $states.result.LastEvaluatedKey %}"
+            }
         },
         "Notificar: Stock listado": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": "{%  %}",
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                        "Source": "app.inventory",
+                        "DetailType": "Producto.ListadoExitoso",
+                        "EventBusName": "${EventBusName}",
+                        "Detail": "{% $string({\n  \"meta\": $originalMeta,\n  \"ui\": {\n    \"action\": \"HYDRATE\",\n    \"target\": \"products_store\",\n    \"variant\": \"SUCCESS\",\n    \"message\": \"Productos cargados\"\n  },\n  \"data\": {\n    \"products\": $items,\n    \"nextPageKey\": $lastKey\n  }}) %}"
                     }
                 ]
             },
             "End": true
         },
-        "Obtener Stock de los productos": {
+        "Verificar y Reservar Stock": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::aws-sdk:dynamodb:batchGetItem",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:transactWriteItems",
+            "Comment": "Resta stock de TODOS los items. Si uno no tiene stock, falla todo.",
             "Arguments": {
-                "RequestItems": {
-                    "DB Inventario": {
-                        "Keys.$": "{% $states.input.detail.productIds ~> $map(function($id){ { 'productId': {'S': $id} } }) %}",
-                        "ProjectionExpression": "productId, stock, reserved"
-                    }
-                }
+                "TransactItems": "{% $inputData.items ~> $map(function($item) {\n{\n  \"Update\": {\n    \"TableName\": \"${self:custom.InventoryTableName}\",\n    \"Key\": {\n      \"pk\": { \"S\": $item.tenantId },\n      \"sk\": { \"S\": $item.productSku }\n    },\n    \"UpdateExpression\": \"SET stock = stock - :qty\",\n    \"ConditionExpression\": \"stock >= :qty\",\n    \"ExpressionAttributeValues\": {\n      \":qty\": { \"N\": $string($item.qty) }\n    }\n  }\n}\n}) %}"
             },
-            "Next": "RevisarStock"
-        },
-        "RevisarStock": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Arguments": {
-                "FunctionName": "{% $states.input.detail.revisarStockLambdaArn ? $states.input.detail.revisarStockLambdaArn : '' %}",
-                "Payload.$": "$"
-            },
-            "Retry": [
+            "Next": "Responder a MS Pedidos: Éxito",
+            "Catch": [
                 {
                     "ErrorEquals": [
-                        "Lambda.ServiceException",
-                        "Lambda.AWSLambdaException",
-                        "Lambda.SdkClientException",
-                        "Lambda.TooManyRequestsException"
+                        "DynamoDB.TransactionCanceledException",
+                        "DynamoDB.ConditionalCheckFailedException"
                     ],
-                    "IntervalSeconds": 1,
-                    "MaxAttempts": 3,
-                    "BackoffRate": 2,
-                    "JitterStrategy": "FULL"
-                }
-            ],
-            "Next": "Choice (1)"
-        },
-        "Choice (1)": {
-            "Type": "Choice",
-            "Choices": [
-                {
-                    "Condition": "{% $states.input.Payload.reserved = true %}",
-                    "Next": "StockReservado"
-                },
-                {
-                    "Condition": "{% $states.input.Payload.reserved = false %}",
-                    "Next": "Stock no disponible"
+                    "Next": "Responder a MS Pedidos: Fallo"
                 }
             ]
         },
-        "Stock no disponible": {
+        "Responder a MS Pedidos: Éxito": {
+            "Type": "Task",
+            "Arguments": {
+                "TaskToken": "{% $taskToken %}",
+                "Output": "{% $string({\n          \"status\": \"RESERVADO\",\n          \"items\": $inputData.items\n        }) %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:sfn:sendTaskSuccess",
+            "End": true
+        },
+        "Responder a MS Pedidos: Fallo": {
+            "Type": "Task",
+            "Comment": "Recibe el objeto de error como input ($states.input)",
+            "Arguments": {
+                "TaskToken": "{% $taskToken %}",
+                "Output": "{% $string({\n          \"status\": \"SIN_STOCK\",\n          \"reason\": \"Stock insuficiente para uno o más productos\",\n          \"details\": $states.input.Cause\n        }) %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:sfn:sendTaskSuccess",
+            "End": true
+        },
+        "State: Pedido en Preparacion": {
             "Type": "Task",
             "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": "{% $string($merge($states.input.Payload, { eventType: 'StockNoDisponible' })) %}",
-                        "DetailType": "StockNoDisponible",
-                        "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
-                        "Source": "inventario.microservicio"
+                        "Source": "app.inventory",
+                        "DetailType": "Pedido.EnPreparacion",
+                        "EventBusName": "${EventBusName}",
+                        "Detail": "{% $string({\n            \"meta\": $meta,\n            \"data\": { \n              \"orderId\": $inputData.orderId, \n              \"items\": $inputData.items \n            }\n}) %}"
                     }
                 ]
             },
             "End": true
         },
-        "StockReservado": {
+        "Notificar: Pedido Cancelado": {
             "Type": "Task",
             "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": "{% $string($merge($states.input.Payload, { eventType: 'StockReservado' })) %}",
-                        "DetailType": "StockReservado",
-                        "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
-                        "Source": "inventario.microservicio"
+                        "Source": "app.inventory",
+                        "DetailType": "Stock.Liberado",
+                        "EventBusName": "${EventBusName}",
+                        "Detail": "{% $string({\n            \"meta\": $meta,\n            \"data\": { \"orderId\": $inputData.orderId, \"status\": \"ROLLBACK_OK\" }\n          }) %}"
                     }
                 ]
             },
             "End": true
         },
-        "Pedido en preparación": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents",
-            "Arguments": {
-                "Entries": [
-                    {
-                        "Detail": "{% $string($merge($states.input, { eventType: 'PedidoEnPreparacion' })) %}",
-                        "DetailType": "PedidoEnPreparacion",
-                        "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
-                        "Source": "inventario.microservicio"
-                    }
-                ]
-            },
-            "End": true
-        },
-        "Pedido cancelado": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents",
-            "Arguments": {
-                "Entries": [
-                    {
-                        "Detail": "{% $unmarshall := function($m){\n  $reduce($keys($m), {}, function($acc,$k){\n    $v := $m[$k];\n    $t := $keys($v)[0];\n    $val := $t = 'N' ? $number($v.N) :\n            ($t = 'S' ? $v.S :\n            ($t = 'BOOL' ? $v.BOOL :\n            ($t = 'M' ? $unmarshall($v.M) :\n            ($t = 'L' ? $map($v.L, function($x){\n                $xType := $keys($x)[0];\n                $xType = 'M' ? $unmarshall($x.M) :\n                ($xType = 'N' ? $number($x.N) :\n                ($xType = 'S' ? $x.S : $x))\n              }) : null)))));\n    $merge([$acc, { ($k): $val }])\n  })\n};\n$source := $states.input.Attributes ? $unmarshall($states.input.Attributes) : ( $states.input.Payload ? ( $states.input.Payload.Attributes ? $unmarshall($states.input.Payload.Attributes) : $states.input.Payload ) : $states.input );\n$string($merge($source, { eventType: 'PedidoCancelado' })) %}",
-                        "DetailType": "PedidoCancelado",
-                        "EventBusName": "{% $states.input.detail.eventBusName ? $states.input.detail.eventBusName : 'MyEventBusName' %}",
-                        "Source": "inventario.microservicio"
-                    }
-                ]
-            },
-            "End": true
+        "Error Critico: Fallo Reversion": {
+            "Type": "Fail",
+            "Error": "CriticalDataInconsistency",
+            "Cause": "{% 'Fallo al revertir stock.\\nRazón técnica: ' & $states.input.Cause %}"
         }
     },
     "QueryLanguage": "JSONata"

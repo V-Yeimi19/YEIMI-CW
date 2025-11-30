@@ -1,0 +1,33 @@
+{
+    "products": [
+        {
+            "tenantId": "SURCO_1",
+            "sku": "ALITAS_BBQ_12",
+            "productType": "PLATO_FONDO",
+            "stock": 50,
+            "price": 24.90,
+            "name": "Alitas BBQ x12",
+            "description": "12 Alitas bañadas en salsa BBQ con papas fritas",
+            "img": "https://img.chinawok.com/alitas.jpg"
+        },
+        {
+            "tenantId": "SURCO_1",
+            "sku": "BEBIDA_INKA_1.5L",
+            "productType": "BEBIDAS",
+            "stock": 100,
+            "price": 12.50,
+            "name": "Inca Kola 1.5L",
+            "description": "El sabor del perú, bien helada",
+            "img": "https://img.chinawok.com/inka.jpg"
+        },
+        {
+            "tenantId": "LARCO_1",
+            "sku": "ALITAS_BBQ_12",
+            "productType": "PLATO_FONDO",
+            "stock": 20,
+            "price": 26.90,
+            "name": "Alitas BBQ x12",
+            "description": "Precio diferenciado por zona turística"
+        }
+    ]
+}

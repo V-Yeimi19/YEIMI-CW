@@ -1,47 +1,59 @@
 {
-    "Comment": "A description of my state machine",
-    "StartAt": "Selector de Evento",
+    "Comment": "Gestor de Sesiones y Autenticación (Cognito + DynamoDB)",
+    "StartAt": "Preparar Contexto",
     "States": {
+        "Preparar Contexto": {
+            "Type": "Pass",
+            "Assign": {
+                "meta": "{% $states.input.detail.meta %}",
+                "inputData": "{% $states.input.detail.data %}",
+                "connectionId": "{% $states.input.detail.meta.connectionId %}",
+                "eventType": "{% $states.input['detail-type'] %}"
+            },
+            "Next": "Selector de Evento"
+        },
         "Selector de Evento": {
             "Type": "Choice",
             "Choices": [
                 {
                     "Next": "Login Cliente",
-                    "Condition": "{% $['detail-type'] = 'LoginCliente' %}"
+                    "Condition": "{% $eventType = 'Auth.LoginCliente' %}"
                 },
                 {
                     "Next": "Login Manager",
-                    "Condition": "{% $['detail-type'] = 'LoginManagerAdmin' %}"
+                    "Condition": "{% $eventType = 'Auth.LoginManager' %}"
                 },
                 {
                     "Next": "Registrar Cliente",
-                    "Condition": "{% $['detail-type'] = 'RegisterCliente' %}"
+                    "Condition": "{% $eventType = 'Auth.RegisterCliente' %}"
                 },
                 {
-                    "Condition": "{% $['detail-type'] = 'RegisterManager' %}",
+                    "Condition": "{% $eventType = 'Auth.RegisterManager' %}",
                     "Next": "Registrar Managers"
                 },
                 {
                     "Next": "Refresh TTL de conexion",
-                    "Condition": "{% $['detail-type'] = 'Ping' %}",
+                    "Condition": "{% $eventType = 'System.Ping' %}",
                     "Comment": "Esta ruta sirve para hacer Pong y que reinicie el ttl de la conexion"
-                },
-                {
-                    "Next": "Conectar Conexion",
-                    "Condition": "{% $['detail-type'] = 'Connect' %}"
-                },
-                {
-                    "Next": "Desconectar Conexion",
-                    "Condition": "{% $['detail-type'] = 'Disconnect' %}"
                 }
             ]
         },
         "Registrar Managers": {
             "Type": "Task",
             "Arguments": {
-                "ClientId": "{% Con serverless %}",
-                "Username": "{% $client.gmail %}",
-                "Password": "{% $client.password %}"
+                "ClientId": "${self:custom.UserPoolClientId}",
+                "Username": "{% $inputData.email %}",
+                "Password": "{% $inputData.password %}",
+                "UserAttributes": [
+                    {
+                        "Name": "email",
+                        "Value": "{% $inputData.email %}"
+                    },
+                    {
+                        "Name": "name",
+                        "Value": "{% $inputData.name %}"
+                    }
+                ]
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
             "Next": "Agregar a grupo de Managers"
@@ -49,26 +61,58 @@
         "Agregar a grupo de Managers": {
             "Type": "Task",
             "Arguments": {
-                "GroupName": "Managers",
-                "UserPoolId": "{% con serverless %}",
-                "Username": "{% $client.gmail %}"
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.email %}",
+                "GroupName": "Managers"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminAddUserToGroup",
+            "Next": "Guardar Manager en DB"
+        },
+        "Guardar Manager en DB": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Arguments": {
+                "TableName": "${self:custom.UsersTableName}",
+                "Item": {
+                    "user_id": {
+                        "S": "{% 'USER#' & $userSub %}"
+                    },
+                    "entity": {
+                        "S": "PROFILE"
+                    },
+                    "tenant_context": {
+                        "S": "{% 'TENANT#' & $inputData.sucursal %}"
+                    },
+                    "Role": {
+                        "S": "MANAGER"
+                    },
+                    "atributos": {
+                        "M": {
+                            "nombre": {
+                                "S": "{% $inputData.name %}"
+                            },
+                            "Ubicacion": {
+                                "S": "{% $inputData.ubicacion %}"
+                            },
+                            "Identificador_sucursal": {
+                                "S": "{% $inputData.sucursal %}"
+                            }
+                        }
+                    }
+                }
+            },
             "Next": "Notificar: ManagerRegistrado"
         },
         "Notificar: ManagerRegistrado": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": {
-                            "Message": "Hello from Step Functions!",
-                            "TaskToken": "{% $states.context.Task.Token %}"
-                        },
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                        "Source": "app.session",
+                        "DetailType": "Auth.ManagerRegistrado",
+                        "EventBusName": "${self:custom.EventBusName}",
+                        "Detail": "{% $string({\n          \"meta\": $meta,\n          \"ui\": { \n            \"action\": \"SHOW_TOAST\", \n            \"variant\": \"SUCCESS\", \n            \"message\": \"Manager creado para la sucursal \" & $inputData.sucursal \n          }\n}) %}"
                     }
                 ]
             },
@@ -79,30 +123,35 @@
             "Arguments": {
                 "AuthFlow": "USER_PASSWORD_AUTH",
                 "AuthParameters": {
-                    "USERNAME": "{% $client.gmail\n %}",
-                    "PASSWORD": "{% $client.password %}"
+                    "USERNAME": "{% $inputData.email %}",
+                    "PASSWORD": "{% $inputData.password %}"
                 },
-                "ClientId": "{% obtener con serverless %}"
+                "ClientId": "${self:custom.UserPoolClientId}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:initiateAuth",
-            "Comment": "Requiere parametro de serverless (argumentos)",
-            "Next": "Verificar Rol Cliente"
+            "Next": "Verificar Rol Cliente",
+            "Assign": {
+                "authResult": "{% $states.result.AuthenticationResult %}"
+            }
         },
         "Verificar Rol Cliente": {
             "Type": "Task",
             "Arguments": {
-                "UserPoolId": "{% inyectado con serverless %}",
-                "Username": "{% $client.email %}"
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.email %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminListGroupsForUser",
-            "Next": "Es Cliente?"
+            "Next": "Es Cliente?",
+            "Assign": {
+                "groups": "{% $states.result.Groups.GroupName %}"
+            }
         },
         "Es Cliente?": {
             "Type": "Choice",
             "Choices": [
                 {
                     "Next": "Agregar Rol Cliente a Conexion",
-                    "Condition": "{% Si es cliente %}"
+                    "Condition": "{% 'Clientes' in $groups %}"
                 }
             ],
             "Default": "Notificar: Login Fallido"
@@ -111,16 +160,25 @@
             "Type": "Task",
             "Resource": "arn:aws:states:::dynamodb:updateItem",
             "Arguments": {
-                "TableName": "MyDynamoDBTable",
+                "TableName": "${self:custom.ConnectionsTableName}",
                 "Key": {
-                    "Column": {
-                        "S": "MyEntry"
+                    "connection_id": {
+                        "S": "{% $connectionId %}"
                     }
                 },
-                "UpdateExpression": "SET MyKey = :myValueRef",
+                "UpdateExpression": "SET user_id = :uid, #r = :role, tenant_id = :tid",
+                "ExpressionAttributeNames": {
+                    "#r": "Role"
+                },
                 "ExpressionAttributeValues": {
-                    ":myValueRef": {
-                        "S": "MyValue"
+                    ":uid": {
+                        "S": "{% 'USER#' & $inputData.email %}"
+                    },
+                    ":role": {
+                        "S": "CLIENTE"
+                    },
+                    ":tid": {
+                        "S": "GLOBAL"
                     }
                 }
             },
@@ -128,17 +186,14 @@
         },
         "Notificar: Login Fallido": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": {
-                            "Message": "Hello from Step Functions!",
-                            "TaskToken": "{% $states.context.Task.Token %}"
-                        },
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                        "Source": "app.session",
+                        "DetailType": "Auth.LoginFallido",
+                        "EventBusName": "${self:custom.EventBusName}",
+                        "Detail": "{% $string({ \n  \"meta\": $meta, \n  \"ui\": { \n    \"action\": \"SHOW_TOAST\", \n    \"variant\": \"ERROR\", \n    \"message\": \"Credenciales inválidas o no tienes permisos.\" \n  } \n}) %}"
                     }
                 ]
             },
@@ -147,32 +202,59 @@
         "Login Manager": {
             "Type": "Task",
             "Arguments": {
+                "ClientId": "${self:custom.UserPoolClientId}",
                 "AuthFlow": "USER_PASSWORD_AUTH",
                 "AuthParameters": {
-                    "USERNAME": "{% $client.gmail\n %}",
-                    "PASSWORD": "{% $client.password %}"
-                },
-                "ClientId": "{% obtener con serverless %}"
+                    "USERNAME": "{% $inputData.email %}",
+                    "PASSWORD": "{% $inputData.password %}"
+                }
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:initiateAuth",
             "Comment": "Requiere parametro de serverless (argumentos)",
-            "Next": "Verificar Rol Manager o ADMIN"
+            "Next": "Obtener UUID",
+            "Assign": {
+                "authResult": "{% $states.result.AuthenticationResult %}"
+            }
         },
-        "Verificar Rol Manager o ADMIN": {
+        "Obtener UUID": {
             "Type": "Task",
             "Arguments": {
-                "UserPoolId": "{% inyectado con serverless %}",
-                "Username": "{% $client.email %}"
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.email %}"
             },
-            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminListGroupsForUser",
-            "Next": "Es Manager o Admin?"
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminGetUser",
+            "Next": "Obtener Rol del Perfil",
+            "Comment": "Necesitamos esto para traducir Email -> UUID",
+            "Assign": {
+                "realUserUuid": "{% $states.result.Username %}"
+            }
+        },
+        "Obtener Rol del Perfil": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Arguments": {
+                "TableName": "${self:custom.UsersTableName}",
+                "Key": {
+                    "user_id": {
+                        "S": "{% 'USER#' & $realUserUuid %}"
+                    },
+                    "entity": {
+                        "S": "PROFILE"
+                    }
+                }
+            },
+            "Next": "Es Manager o Admin?",
+            "Assign": {
+                "dbRole": "{% $states.result.Item.Role.S %}",
+                "dbTenantContext": "{% $states.result.Item.tenant_context.S %}"
+            }
         },
         "Es Manager o Admin?": {
             "Type": "Choice",
             "Choices": [
                 {
                     "Next": "Agregar Rol Manager o Admin a Conexion",
-                    "Condition": "{% es Manager o Admin %}"
+                    "Condition": "{% $dbRole = 'MANAGER' or $dbRole = 'ADMIN' %}"
                 }
             ],
             "Default": "Notificar: Login Fallido"
@@ -181,16 +263,25 @@
             "Type": "Task",
             "Resource": "arn:aws:states:::dynamodb:updateItem",
             "Arguments": {
-                "TableName": "MyDynamoDBTable",
+                "TableName": "${self:custom.ConnectionsTableName}",
                 "Key": {
-                    "Column": {
-                        "S": "MyEntry"
+                    "connection_id": {
+                        "S": "{% $connectionId %}"
                     }
                 },
-                "UpdateExpression": "SET MyKey = :myValueRef",
+                "UpdateExpression": "SET user_id = :uid, #r = :role, tenant_id = :tid",
+                "ExpressionAttributeNames": {
+                    "#r": "Role"
+                },
                 "ExpressionAttributeValues": {
-                    ":myValueRef": {
-                        "S": "MyValue"
+                    ":uid": {
+                        "S": "{% 'USER#' & $realUserUuid %}"
+                    },
+                    ":role": {
+                        "S": "{% $dbRole %}"
+                    },
+                    ":tid": {
+                        "S": "{% $split($dbTenantContext, '#')[1] %}"
                     }
                 }
             },
@@ -198,17 +289,14 @@
         },
         "Notificar: Login Exitoso": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": {
-                            "Message": "Hello from Step Functions!",
-                            "TaskToken": "{% $states.context.Task.Token %}"
-                        },
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                        "Source": "app.session",
+                        "DetailType": "Auth.LoginExitoso",
+                        "EventBusName": "${self:custom.EventBusName}",
+                        "Detail": "{% $string({\n            \"meta\": $meta,\n            \"ui\": { \n              \"action\": \"HYDRATE\", \n              \"target\": \"session_store\", \n              \"variant\": \"SUCCESS\", \n              \"message\": \"Bienvenido\" \n            },\n            \"data\": { \n              \"accessToken\": $authResult.AccessToken, \n              \"idToken\": $authResult.IdToken, \n              \"role\": ($eventType = 'Auth.LoginManager' ? 'MANAGER' : 'CLIENT') }\n}) %}"
                     }
                 ]
             },
@@ -217,9 +305,22 @@
         "Registrar Cliente": {
             "Type": "Task",
             "Arguments": {
-                "ClientId": "{% Con serverless %}",
-                "Username": "{% $client.gmail %}",
-                "Password": "{% $client.password %}"
+                "ClientId": "${self:custom.UserPoolClientId}",
+                "Username": "{% $inputData.gmail %}",
+                "Password": "{% $inputData.password %}",
+                "UserAttributes": [
+                    {
+                        "Name": "email",
+                        "Value": "{% $inputData.email %}"
+                    },
+                    {
+                        "Name": "name",
+                        "Value": "{% $inputData.name %}"
+                    }
+                ]
+            },
+            "Assign": {
+                "userSub": "{% $states.result.UserSub %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
             "Next": "Agregar a Grupo de Clientes"
@@ -228,38 +329,102 @@
             "Type": "Task",
             "Arguments": {
                 "GroupName": "Clientes",
-                "UserPoolId": "{% con serverless %}",
-                "Username": "{% $client.gmail %}"
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.gmail %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminAddUserToGroup",
-            "Next": "Notificar: ClienteRegistrado"
+            "Next": "Guardar Cliente en DB"
         },
-        "Notificar: ClienteRegistrado": {
+        "Guardar Cliente en DB": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Comment": "Crea el perfil del cliente en DB Usuarios",
             "Arguments": {
-                "Entries": [
-                    {
-                        "Detail": {
-                            "Message": "Hello from Step Functions!",
-                            "TaskToken": "{% $states.context.Task.Token %}"
-                        },
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                "TableName": "${self:custom.UsersTableName}",
+                "Item": {
+                    "user_id": {
+                        "S": "{% 'USER#' & $userSub %}"
+                    },
+                    "entity": {
+                        "S": "PROFILE"
+                    },
+                    "tenant_context": {
+                        "S": "GLOBAL#CLIENT"
+                    },
+                    "Role": {
+                        "S": "CLIENTE"
+                    },
+                    "atributos": {
+                        "M": {
+                            "nombre": {
+                                "S": "{% $inputData.name %}"
+                            },
+                            "email": {
+                                "S": "{% $inputData.email %}"
+                            },
+                            "direcciones": {
+                                "L": []
+                            }
+                        }
                     }
-                ]
+                }
             },
+            "Next": "Notificacion Paralela"
+        },
+        "Notificacion Paralela": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "Notificar: A Conexion",
+                    "States": {
+                        "Notificar: A Conexion": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "app.session",
+                                        "DetailType": "Auth.RegistroExitoso",
+                                        "EventBusName": "${self:custom.EventBusName}",
+                                        "Detail": "{% $string({\n      \"meta\": $meta, \n      \"ui\": { \n        \"action\": \"SHOW_TOAST\", \n        \"variant\": \"SUCCESS\", \n        \"message\": \"Cuenta creada exitosamente\" \n      }\n}) %}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Notificar: A manager",
+                    "States": {
+                        "Notificar: A manager": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::events:putEvents",
+                            "Arguments": {
+                                "Entries": [
+                                    {
+                                        "Source": "app.session",
+                                        "DetailType": "Auth.NuevoClienteRegistrado",
+                                        "EventBusName": "${self:custom.EventBusName}",
+                                        "Detail": "{% $string({\n          \"meta\": {\n              \"scope\": \"NOTIFICATION\",\n              \"targetType\": \"TENANT\",\n              \"targetId\": \"MANAGERS_GLOBAL\",\n              \"correlationId\": $meta.correlationId\n          },\n          \"ui\": { \n              \"action\": \"SHOW_TOAST\", \n              \"variant\": \"INFO\", \n              \"message\": \"Nuevo cliente registrado: \" & $inputData.name \n          },\n          \"data\": { \n            \"userId\": $userSub \n          }\n}) %}"
+                                    }
+                                ]
+                            },
+                            "End": true
+                        }
+                    }
+                }
+            ],
             "End": true
         },
         "Refresh TTL de conexion": {
             "Type": "Task",
             "Resource": "arn:aws:states:::dynamodb:updateItem",
             "Arguments": {
-                "TableName": "DB_Conexiones",
+                "TableName": "${self:custom.ConnectionsTableName}",
                 "Key": {
                     "connection_id": {
-                        "S": "$states.input.connection_id"
+                        "S": "{% $connectionId %}"
                     }
                 },
                 "UpdateExpression": "SET #t = :newTTL",
@@ -268,54 +433,24 @@
                 },
                 "ExpressionAttributeValues": {
                     ":newTTL": {
-                        "N": "$string($floor(($toMillis($now()) + 7200000) / 1000))"
+                        "N": "{% $string($floor(($millis() + 7200000) / 1000)) %}"
                     }
-                },
-                "ConditionExpression": "attribute_exists(connection_id)"
+                }
             },
-            "Next": "Pong!"
+            "Next": "Notificar: Pong!"
         },
-        "Pong!": {
+        "Notificar: Pong!": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents.waitForTaskToken",
+            "Resource": "arn:aws:states:::events:putEvents",
             "Arguments": {
                 "Entries": [
                     {
-                        "Detail": {
-                            "Message": "Hello from Step Functions!",
-                            "TaskToken": "{% $states.context.Task.Token %}"
-                        },
-                        "DetailType": "MyDetailType",
-                        "EventBusName": "MyEventBusName",
-                        "Source": "MySource"
+                        "Source": "app.session",
+                        "DetailType": "System.Pong",
+                        "EventBusName": "${self:custom.EventBusName}",
+                        "Detail": "{% $string({ \n  \"meta\": $meta,\n  \"ui\": { \n    \"action\": \"SILENT\", \n    \"message\": \"Pong\" \n  } \n}) %}"
                     }
                 ]
-            },
-            "End": true
-        },
-        "Conectar Conexion": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::dynamodb:putItem",
-            "Arguments": {
-                "TableName": "MyDynamoDBTable",
-                "Item": {
-                    "Column": {
-                        "S": "MyEntry"
-                    }
-                }
-            },
-            "End": true
-        },
-        "Desconectar Conexion": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::dynamodb:deleteItem",
-            "Arguments": {
-                "TableName": "MyDynamoDBTable",
-                "Key": {
-                    "Column": {
-                        "S": "MyEntry"
-                    }
-                }
             },
             "End": true
         }

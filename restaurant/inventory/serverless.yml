@@ -14,9 +14,14 @@ custom:
   # Heredamos la configuración de esbuild del archivo común
   esbuild: ${self:custom.common.custom.esbuild}
 
+  # Step Functions State Machine
+  InventoryTableName: ${cf:cw-infra-shared-${self:provider.stage}.InventoryTableName}
+  EventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+
 # 3. PLUGINS (Se deben listar explícitamente en cada servicio)
 plugins:
   - serverless-esbuild
+  - serverless-step-functions
   - serverless-dotenv-plugin
 
 # 4. PROVIDER (Heredamos todo del common)
@@ -29,9 +34,85 @@ provider:
   timeout: ${self:custom.common.provider.timeout}
   
   # Heredamos el Rol dinámico (se resuelve con el .env cargado arriba)
-  role: ${self:custom.common.provider.role}
+  iam: ${self:custom.common.provider.iam}
 
   # Heredamos variables de entorno globales (EventBus, etc.)
   environment: ${self:custom.common.provider.environment}
 
 # 5. Insfractructura especifica del servicio
+
+stepFunctions:
+  stateMachines:
+    InventoryFlow:
+      name: ms-inventory-${self:provider.stage}
+
+      type: EXPRESS
+
+      role: ${self:custom.common.provider.iam.role}
+
+      # Tu archivo externo
+      definition: ${file(ms-inventory.asl.json)}
+
+      loggingConfig:
+        level: ALL
+        includeExecutionData: true
+        destinations:
+          - !GetAtt InventoryLogGroup.Arn
+
+      tracingConfig:
+        enabled: true
+      
+      events:
+        # REGLA 1: Tráfico del Frontend (WebSocket)
+        # Requiere validación de conexión estricta
+        - eventBridge:
+            eventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+            iamRole: ${self:custom.common.provider.iam.role}
+            event:
+              source:
+                - "app.websocket.inbound"
+              detail-type:
+                - "Productos.Listar"
+              # --- EL FILTRO DE SEGURIDAD ---
+              detail:
+                meta:
+                  connectionId: 
+                    - exists: true  # <--- Solo arranca si hay conexión
+          
+        # REGLA 2: Tráfico Backend (SAGA / Orquestación)
+        # Viene de otros MS (Pedidos/Pagos), no filtramos por connectionId estricto
+        # porque a veces son procesos batch o internos.
+        - eventBridge:
+            eventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+            iamRole: ${self:custom.common.provider.iam.role}
+            event:
+              source: 
+                - "app.orders"
+                - "app.payments"
+                # Agregamos 'app.inventory' por si haces re-intentos internos
+              detail-type:
+                - "Stock.Verificar"
+                - "Pago.Confirmado"
+                - "Pago.Fallido"
+                - "Pedido.Cancelado"
+
+resources:
+  Resources:
+    # Necesitas crear el Log Group manualmente para Express
+    InventoryLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/vendedlogs/states/cw-inventory-ms-${self:provider.stage}
+        RetentionInDays: 7
+
+# ---------------------------------------------------
+# ENDPOINT DE TEST
+# ---------------------------------------------------
+functions:
+  createProductsBatch:
+    handler: src/lambdas/CreateProducts.handler
+    events:
+      - http:
+          path: products/batch
+          method: post
+          cors: true
