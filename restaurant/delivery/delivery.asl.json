@@ -120,35 +120,11 @@
             "Comment": "Publica eventos para Email y Notificaciones",
             "Branches": [
                 {
-                    "StartAt": "sendEmail(1)",
+                    "StartAt": "EnviarEmailPreparacion",
                     "States": {
-                        "sendEmail(1)": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::lambda:invoke",
-                            "Output": "{% $states.result.Payload %}",
-                            "Arguments": {
-                                "FunctionName": "",
-                                "Payload": "{% $states.input %}"
-                            },
-                            "Retry": [
-                                {
-                                    "ErrorEquals": [
-                                        "Lambda.ServiceException",
-                                        "Lambda.AWSLambdaException",
-                                        "Lambda.SdkClientException",
-                                        "Lambda.TooManyRequestsException"
-                                    ],
-                                    "IntervalSeconds": 1,
-                                    "MaxAttempts": 3,
-                                    "BackoffRate": 2,
-                                    "JitterStrategy": "FULL"
-                                }
-                            ],
-                            "Next": "EnviarEmailPreparacion"
-                        },
                         "EnviarEmailPreparacion": {
                             "Type": "Task",
-                            "Comment": "Lambda que envía email usando SendGrid",
+                            "Comment": "Lambda sendEmail - Notifica preparación via SendGrid",
                             "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
@@ -177,6 +153,7 @@
                         },
                         "EmailFallidoPreparacion": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -320,35 +297,11 @@
             "Type": "Parallel",
             "Branches": [
                 {
-                    "StartAt": "sendEmail(2)",
+                    "StartAt": "EnviarEmailDespacho",
                     "States": {
-                        "sendEmail(2)": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::lambda:invoke",
-                            "Output": "{% $states.result.Payload %}",
-                            "Arguments": {
-                                "FunctionName": "",
-                                "Payload": "{% $states.input %}"
-                            },
-                            "Retry": [
-                                {
-                                    "ErrorEquals": [
-                                        "Lambda.ServiceException",
-                                        "Lambda.AWSLambdaException",
-                                        "Lambda.SdkClientException",
-                                        "Lambda.TooManyRequestsException"
-                                    ],
-                                    "IntervalSeconds": 1,
-                                    "MaxAttempts": 3,
-                                    "BackoffRate": 2,
-                                    "JitterStrategy": "FULL"
-                                }
-                            ],
-                            "Next": "EnviarEmailDespacho"
-                        },
                         "EnviarEmailDespacho": {
                             "Type": "Task",
-                            "Comment": "Lambda que envía email usando SendGrid",
+                            "Comment": "Lambda sendEmail - Notifica despacho via SendGrid",
                             "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
@@ -370,13 +323,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoDespacho"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoDespacho": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -519,34 +473,11 @@
             "Type": "Parallel",
             "Branches": [
                 {
-                    "StartAt": "sendEmail(3)",
+                    "StartAt": "EnviarEmailEnCamino",
                     "States": {
-                        "sendEmail(3)": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::lambda:invoke",
-                            "Output": "{% $states.result.Payload %}",
-                            "Arguments": {
-                                "FunctionName": "",
-                                "Payload": "{% $states.input %}"
-                            },
-                            "Retry": [
-                                {
-                                    "ErrorEquals": [
-                                        "Lambda.ServiceException",
-                                        "Lambda.AWSLambdaException",
-                                        "Lambda.SdkClientException",
-                                        "Lambda.TooManyRequestsException"
-                                    ],
-                                    "IntervalSeconds": 1,
-                                    "MaxAttempts": 3,
-                                    "BackoffRate": 2,
-                                    "JitterStrategy": "FULL"
-                                }
-                            ],
-                            "Next": "EnviarEmailEnCamino"
-                        },
                         "EnviarEmailEnCamino": {
                             "Type": "Task",
+                            "Comment": "Lambda sendEmail - Notifica envío via SendGrid",
                             "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
@@ -568,13 +499,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoEnCamino"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoEnCamino": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -681,34 +613,11 @@
             "Type": "Parallel",
             "Branches": [
                 {
-                    "StartAt": "sendEmail(4)",
+                    "StartAt": "EnviarEmailEntregado",
                     "States": {
-                        "sendEmail(4)": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::lambda:invoke",
-                            "Output": "{% $states.result.Payload %}",
-                            "Arguments": {
-                                "FunctionName": "",
-                                "Payload": "{% $states.input %}"
-                            },
-                            "Retry": [
-                                {
-                                    "ErrorEquals": [
-                                        "Lambda.ServiceException",
-                                        "Lambda.AWSLambdaException",
-                                        "Lambda.SdkClientException",
-                                        "Lambda.TooManyRequestsException"
-                                    ],
-                                    "IntervalSeconds": 1,
-                                    "MaxAttempts": 3,
-                                    "BackoffRate": 2,
-                                    "JitterStrategy": "FULL"
-                                }
-                            ],
-                            "Next": "EnviarEmailEntregado"
-                        },
                         "EnviarEmailEntregado": {
                             "Type": "Task",
+                            "Comment": "Lambda sendEmail - Notifica entrega via SendGrid",
                             "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
@@ -730,13 +639,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoEntregado"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoEntregado": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
