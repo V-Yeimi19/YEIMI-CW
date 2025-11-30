@@ -37,11 +37,16 @@ export interface NotificationDetail {
 
 // EL EVENTO DE EVENTBRIDGE (Lo que llega en el Body de SQS)
 export interface EventBridgeNotificationEvent {
-    Source: string;
-    DetailType: string;
-    Detail: NotificationDetail;
-    // Nota: EventBridge envía 'Detail' como objeto, pero al pasar por SQS
-    // a veces llega serializado. El handler abajo se encarga de esto.
+    id: string;
+    version: string;
+    account: string;
+    time: string;
+    region: string;
+    resources: string[];
+
+    source: string;        // ANTES: Source
+    "detail-type": string; // ANTES: DetailType (AWS usa kebab-case)
+    detail: NotificationDetail; // ANTES: Detail
 }
 
 // EL MENSAJE FINAL AL CLIENTE (Lo que enviaremos por WebSocket)

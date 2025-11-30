@@ -71,9 +71,9 @@ async function processRecord(record: SQSRecord): Promise<void> {
     const ebEvent: EventBridgeNotificationEvent = JSON.parse(record.body);
 
     // Validación defensiva: A veces 'Detail' es un string si no se configuró bien el mapping
-    const detail = (typeof ebEvent.Detail === 'string')
-        ? JSON.parse(ebEvent.Detail) as NotificationDetail
-        : ebEvent.Detail;
+    const detail = (typeof ebEvent.detail === 'string')
+        ? JSON.parse(ebEvent.detail) as NotificationDetail
+        : ebEvent.detail;
 
     const { meta, ui, data } = detail;
 

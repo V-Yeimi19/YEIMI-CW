@@ -1,5 +1,9 @@
 service: cw-infra-shared
 
+plugins:
+  - serverless-esbuild
+  - serverless-dotenv-plugin # Por si acaso
+
 provider:
   name: aws
   runtime: nodejs18.x
@@ -12,11 +16,8 @@ provider:
     POWERTOOLS_SERVICE_NAME: WebSocketService
     NODE_OPTIONS: --enable-source-maps
   
-  role: arn:aws:iam::${env:AWS_ACCOUNT_ID}:role/LabRole
-
-plugins:
-  - serverless-esbuild
-  - serverless-dotenv-plugin # Por si acaso
+  iam: 
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
 
 custom:
   dotenv:
@@ -65,7 +66,7 @@ resources:
     PedidosTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: Pedidos
+        TableName: cw-pedidos-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: pedido_id
@@ -98,8 +99,7 @@ resources:
     ConnectionsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        # Nombre físico: t_connections_dev, t_connections_prod, etc.
-        TableName: t_connections_${self:provider.stage}
+        TableName: cw-connections-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         
         # Definimos SOLO los atributos que son Keys o Índices
@@ -168,14 +168,28 @@ resources:
     BusNameExport:
       Value: !Ref CentralEventBus
       Export:
-        Name: ${self:service}-${self:provider.stage}-BusName
+        Name: cw-event-bus-name-${self:provider.stage}
 
     # ARN de la Bus de Eventos
     BusArnExport:
       Value: !GetAtt CentralEventBus.Arn
       Export:
-        Name: ${self:service}-${self:provider.stage}-BusArn
+        Name: cw-event-bus-arn-${self:provider.stage}
 
+    # NOMBRE de la tabla
+    PedidosTableName:
+      Description: "Nombre de la tabla de pedidos"
+      Value: !Ref PedidosTable
+      Export:
+        Name: cw-pedidos-table-name-${self:provider.stage}
+
+    # ARN de la tabla
+    PedidosTableArn:
+      Description: "ARN de la tabla de pedidos"
+      Value: !GetAtt PedidosTable.Arn
+      Export:
+        Name: cw-pedidos-table-arn-${self:provider.stage}
+    
     # NOMBRE de la tabla
     ConnectionsTableName:
       Description: "Nombre de la tabla de conexiones"
