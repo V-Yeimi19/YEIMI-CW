@@ -19,6 +19,16 @@ provider:
         Fn::ImportValue: cw-websocket-endpoint-${self:provider.stage}
     CONNECTIONS_TABLE: 
       Fn::ImportValue: cw-connections-table-name-${self:provider.stage}
+    USER_POOL_CLIENT_ID:
+      Fn::ImportValue: cw-auth-client-id-${self:provider.stage}
+    USER_POOL_ID:
+      Fn::ImportValue: cw-auth-user-pool-id-${self:provider.stage}
+    USERS_TABLE:
+      Fn::ImportValue: cw-users-table-name-${self:provider.stage}
+    INVENTORY_TABLE_NAME:
+      Fn::ImportValue: cw-inventory-table-name-${self:provider.stage}
+    UNIVERSAL_RELAY_ARN:
+      Fn::ImportValue: cw-universal-relay-arn-${self:provider.stage}
 
 # Configuración centralizada de Esbuild
 custom:

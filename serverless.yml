@@ -32,6 +32,12 @@ custom:
     concurrency: 10
 
 functions:
+  # LA LAMBDA RELAY
+  UniversalRelay:
+    handler: shared/src/lambdas/UniversalRelay.handler
+    description: "Lambda comodín para re-ingestar eventos transformados al Bus"
+
+  # RUTAS WEBSOCKET
   wsConnect:
     handler: shared/src/lambdas/Connect.handler
     events:
@@ -49,6 +55,23 @@ functions:
     events:
       - websocket:
           route: $default
+  
+  wsInboundHandler:
+    handler: shared/src/lambdas/RoleAuth.handler
+    events:
+      # Definimos Eventos de Negocio, no "rutas"
+      - websocket:
+          route: Productos.Listar
+      - websocket:
+          route: System.Ping
+      - websocket:
+          route: Auth.LoginCliente
+      - websocket:
+          route: Auth.LoginManager
+      - websocket:
+          route: Auth.RegisterCliente
+      - websocket:
+          route: Auth.RegisterManager
 
 resources:
   Resources:
@@ -59,6 +82,18 @@ resources:
       Type: AWS::Events::EventBus
       Properties:
         Name: cw-event-bus
+  
+    # ---------------------------------------------------
+    # PERMISOS DE LA LAMBDA RELAY
+    # ---------------------------------------------------
+    UniversalRelayPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !GetAtt UniversalRelayLambdaFunction.Arn
+        Action: lambda:InvokeFunction
+        Principal: events.amazonaws.com
+        # Opcional pero recomendado: Restringir a tu Bus específico
+        SourceArn: !GetAtt CentralEventBus.Arn
 
     # ---------------------------------------------------
     # TABLA DE PEDIDOS
@@ -151,7 +186,7 @@ resources:
         AttributeDefinitions:
           - AttributeName: user_id
             AttributeType: S
-          - AttributeName: entity_type
+          - AttributeName: entity
             AttributeType: S
           - AttributeName: tenant_context
             AttributeType: S
@@ -160,7 +195,7 @@ resources:
         KeySchema:
           - AttributeName: user_id
             KeyType: HASH
-          - AttributeName: entity_type
+          - AttributeName: entity
             KeyType: RANGE
         GlobalSecondaryIndexes:
           - IndexName: TenantRoleIndex
@@ -172,6 +207,134 @@ resources:
             Projection:
               ProjectionType: ALL
 
+    # ---------------------------------------------------
+    # TABLA DE INVENTARIO
+    # ---------------------------------------------------
+    InventoryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        # Nombre físico: t_inventario_dev, t_inventario_prod
+        TableName: cw-inventario-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        
+        # Definimos los atributos que usaremos como Llaves o Índices
+        AttributeDefinitions:
+          - AttributeName: producto_id
+            AttributeType: S
+          - AttributeName: tenant_id
+            AttributeType: S
+          - AttributeName: tipo_id
+            AttributeType: S
+        
+        # Primary Key (PK) Principal
+        KeySchema:
+          - AttributeName: tenant_id
+            KeyType: HASH 
+          - AttributeName: producto_id
+            KeyType: RANGE
+
+        # Índices Secundarios Globales (GSI)
+        GlobalSecondaryIndexes:
+          
+          # GSI 1: Para buscar productos por SUCURSAL (tenant_id)
+          # Query: Dame todo el inventario de "SURCO_1"
+          - IndexName: producto_id-index
+            KeySchema:
+              - AttributeName: producto_id
+                KeyType: HASH
+              - AttributeName: tenant_id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL # Traemos stock, precio, etc.
+
+          # GSI 2: Para buscar productos por TIPO (tipo_id)
+          # Query: Dame todos los "Mostrazo_Chinawok" (de todas las tiendas)
+          # Útil para reportes globales o catálogo general
+          - IndexName: tipo_id-index
+            KeySchema:
+              - AttributeName: producto_id
+                KeyType: HASH
+              - AttributeName: tipo_id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    # ---------------------------------------------------
+    # COGNITO USER POOL
+    # ---------------------------------------------------
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: cw-user-pool-${self:provider.stage}
+        # Configuración para loguearse con Email en lugar de Username
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        # Atributos estándar que vas a usar
+        Schema:
+          - Name: email
+            Required: true
+            Mutable: true
+          - Name: name
+            Required: true
+            Mutable: true
+        # Políticas de contraseña (opcional, ajústalo a tu gusto)
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 8
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: false
+            RequireUppercase: true
+
+    # ---------------------------------------------------
+    # 2. APP CLIENT (La "Llave" para tu Backend)
+    # ---------------------------------------------------
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: cw-app-client-${self:provider.stage}
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: false # False para apps web/mobile/lambda directas
+        
+        # FLUJOS DE AUTENTICACIÓN (Vital para tu Step Function)
+        ExplicitAuthFlows:
+          - ALLOW_USER_PASSWORD_AUTH        # Para login directo (user/pass)
+          - ALLOW_REFRESH_TOKEN_AUTH        # Para renovar tokens
+          - ALLOW_ADMIN_USER_PASSWORD_AUTH  # Para login administrativo (backend)
+          - ALLOW_USER_SRP_AUTH             # Protocolo seguro estándar
+
+    # ---------------------------------------------------
+    # 3. GRUPOS DE SEGURIDAD (RBAC)
+    # ---------------------------------------------------
+    
+    # Grupo: ADMIN
+    GroupAdmin:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: Admin
+        UserPoolId: !Ref CognitoUserPool
+        Description: "Super usuarios del sistema"
+        Precedence: 0 # Mayor prioridad
+
+    # Grupo: MANAGERS
+    GroupManagers:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: Managers
+        UserPoolId: !Ref CognitoUserPool
+        Description: "Administradores de sucursal/tenant"
+        Precedence: 5
+
+    # Grupo: CLIENTES
+    GroupClientes:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: Clientes
+        UserPoolId: !Ref CognitoUserPool
+        Description: "Usuarios finales de la app"
+        Precedence: 10
 
   # 2. Exportamos los valores para que los microservicios los lean
   Outputs:
@@ -235,13 +398,56 @@ resources:
         Name: cw-connections-table-arn-${self:provider.stage}
     
     # NOMBRE de la tabla
-    UsuariosTableName:
+    UsersTableName:
         Value: !Ref UsuariosTable
         Export:
-          Name: cw-usuarios-table-name-${self:provider.stage}
+          Name: cw-users-table-name-${self:provider.stage}
     
     # ARN de la tabla
-    UsuariosTableArn:
+    UsersTableArn:
         Value: !GetAtt UsuariosTable.Arn
         Export:
-          Name: cw-usuarios-table-arn-${self:provider.stage}
+          Name: cw-users-table-arn-${self:provider.stage}
+
+    # NOMBRE de la tabla de inventario
+    InventoryTableName:
+      Description: "Nombre de la tabla de inventario"
+      Value: !Ref InventoryTable
+      Export:
+        Name: cw-inventory-table-name-${self:provider.stage}
+
+    # ARN de la tabla de inventario
+    InventoryTableArn:
+      Description: "ARN de la tabla de inventario"
+      Value: !GetAtt InventoryTable.Arn
+      Export:
+        Name: cw-inventory-table-arn-${self:provider.stage}
+
+    # ---------------------------------------------------
+    # OUTPUTS (Para exportar al Session Manager MS)
+    # ---------------------------------------------------
+    
+    # ID del User Pool
+    UserPoolId:
+      Value: !Ref CognitoUserPool
+      Export:
+        Name: cw-auth-user-pool-id-${self:provider.stage}
+
+    # ID del Cliente (App Client ID)
+    UserPoolClientId:
+      Value: !Ref CognitoUserPoolClient
+      Export:
+        Name: cw-auth-client-id-${self:provider.stage}
+
+    # ARN del User Pool (A veces útil para permisos IAM)
+    UserPoolArn:
+      Value: !GetAtt CognitoUserPool.Arn
+      Export:
+        Name: cw-auth-user-pool-arn-${self:provider.stage}
+
+    # ARN de la Lambda Universal Relay
+    UniversalRelayArn:
+      Description: "ARN de la Lambda Universal Relay"
+      Value: !GetAtt UniversalRelayLambdaFunction.Arn
+      Export:
+        Name: cw-universal-relay-arn-${self:provider.stage}

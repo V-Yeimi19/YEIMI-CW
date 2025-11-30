@@ -85,7 +85,6 @@ resources:
                 Service: events.amazonaws.com
               Action: sqs:SendMessage
               Resource: !GetAtt NotificationQueue.Arn
-              # Seguridad: Solo permitimos que TU bus escriba aquí
               Condition:
                 ArnEquals:
                   "aws:SourceArn": !GetAtt NotificationRule.Arn

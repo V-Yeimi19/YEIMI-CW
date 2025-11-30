@@ -14,9 +14,15 @@ custom:
   # Heredamos la configuración de esbuild del archivo común
   esbuild: ${self:custom.common.custom.esbuild}
 
+  UserPoolClientId: ${self:custom.common.provider.environment.USER_POOL_CLIENT_ID}
+  UserPoolId: ${self:custom.common.provider.environment.USER_POOL_ID}
+  UsersTableName: ${self:custom.common.provider.environment.USERS_TABLE}
+  ConnectionsTableName: ${self:custom.common.provider.environment.CONNECTIONS_TABLE}
+  EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+
 # 3. PLUGINS (Se deben listar explícitamente en cada servicio)
 plugins:
-  - serverless-esbuild
+  - serverless-step-functions
   - serverless-dotenv-plugin
 
 # 4. PROVIDER (Heredamos todo del common)
@@ -29,9 +35,112 @@ provider:
   timeout: ${self:custom.common.provider.timeout}
   
   # Heredamos el Rol dinámico (se resuelve con el .env cargado arriba)
-  role: ${self:custom.common.provider.role}
+  iam: ${self:custom.common.provider.iam}
 
   # Heredamos variables de entorno globales (EventBus, etc.)
   environment: ${self:custom.common.provider.environment}
 
 # 5. Insfractructura especifica del servicio
+
+# MS Session Manager
+stepFunctions:
+  stateMachines:
+    SessionFlow:
+      name: SessionManagerFlow-${self:provider.stage}
+
+      type: EXPRESS # Alta velocidad para login
+
+      role: ${self:custom.common.provider.iam.role}
+
+      definition: ${file(ms-session-manager.asl.json)}
+
+      loggingConfig:
+        level: ALL
+        includeExecutionData: true
+        destinations:
+          - !GetAtt SessionLogGroup.Arn
+
+      tracingConfig:
+        enabled: true
+      
+      # EVENTOS (TRIGGERS)
+      events:
+        - eventBridge:
+            eventBusName: ${self:provider.environment.EVENT_BUS_NAME}
+            iamRole: ${self:custom.common.provider.iam.role}
+            event:
+              source: ["app.websocket.inbound"]
+              detail-type:
+                - "Auth.LoginCliente"
+                - "Auth.LoginManager"
+                - "Auth.RegisterCliente"
+                - "System.Ping"
+              detail:
+                meta:
+                  connectionId: [{ "exists": true }]
+        - eventBridge:
+            eventBusName: ${self:provider.environment.EVENT_BUS_NAME}
+            iamRole: ${self:custom.common.provider.iam.role}
+            event:
+              source: ["app.websocket.inbound"]
+              detail-type: 
+                - "Auth.RegisterManager" 
+              detail:
+                meta:
+                  role: ["ADMIN"]
+
+# RECURSOS ADICIONALES
+resources:
+  Resources:
+    SessionLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/vendedlogs/states/SessionManagerFlow-${self:provider.stage}
+        RetentionInDays: 7
+
+    # -----------------------------------------------------------
+    # REGLA DE SEGURIDAD "ELSE" (ACCESO DENEGADO)
+    # Si alguien intenta registrar manager y NO es admin -> Error Toast
+    # -----------------------------------------------------------
+    RuleRegisterManagerDenied:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: RuleRegisterManagerDenied-${self:provider.stage}
+        EventBusName: ${self:custom.EventBusName}
+        EventPattern:
+          source: ["app.websocket.inbound"]
+          detail-type: ["Auth.RegisterManager"]
+          detail:
+            meta:
+              role: 
+                - "anything-but": "ADMIN" # <--- LA MAGIA DEL ELSE
+        Targets:
+          - Id: RelayToBus
+          
+            Arn: ${self:custom.common.provider.environment.UNIVERSAL_RELAY_ARN}
+
+            # Transformamos el evento feo en una Notificación bonita para el Frontend
+            InputTransformer:
+              InputPathsMap:
+                connId: "$.detail.meta.connectionId"
+                reqId: "$.detail.meta.correlationId"
+                userRole: "$.detail.meta.role"
+              InputTemplate: |
+                {
+                  "Source": "app.security",
+                  "DetailType": "Security.AccessDenied",
+                  "Detail": {
+                    "meta": {
+                      "scope": "NOTIFICATION",
+                      "targetType": "CONNECTION",
+                      "targetId": <connId>,
+                      "correlationId": <reqId>
+                    },
+                    "ui": {
+                      "action": "SHOW_TOAST", 
+                      "variant": "ERROR",
+                      "message": "⛔ Acceso Denegado. Rol <userRole> insuficiente."
+                    },
+                    "data": {}
+                  }
+                }
