@@ -18,6 +18,8 @@ export const handler = async (
 ): Promise<APIGatewayProxyResult> => {
 
     logger.addContext(context);
+    logger.info("Evento de Entrada Completo (Raw)", { event });
+
     const connectionId = event.requestContext.connectionId;
 
     // Usamos el routeKey como el "Nombre del Evento" (DetailType)

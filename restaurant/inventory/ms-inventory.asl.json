@@ -7,8 +7,9 @@
             "Assign": {
                 "meta": "{% $states.input.detail.meta %}",
                 "inputData": "{% $states.input.detail.data %}",
-                "eventType": "{% $states.input['detail-type'] %}",
-                "taskToken": "{% $states.input.detail.data.myTaskToken %}"
+                "eventType": "{% $states.input.'detail-type' %}",
+                "taskToken": "{% $states.input.detail.data.myTaskToken ? $states.input.detail.data.myTaskToken : null %}",
+                "limit": "{% $states.input.detail.data.limit ? $states.input.detail.data.limit : 20 %}"
             },
             "Next": "Router Eventos"
         },
@@ -16,7 +17,7 @@
             "Type": "Choice",
             "Choices": [
                 {
-                    "Condition": "{% $states.input.detail.eventType = 'Productos.Listar' %}",
+                    "Condition": "{% $eventType = 'Productos.Listar' %}",
                     "Next": "Obtener Stock paginado"
                 },
                 {
@@ -57,7 +58,7 @@
         "Obtener Stock paginado": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-            "Arguments": "{% $merge([\n  { \n    \"TableName\": \"${self:custom.InventoryTableName}\", \n    \"IndexName\": \"productType-index\", \n    \"KeyConditionExpression\": \"productType = :ptype\", \n    \"FilterExpression\": \"stock > :zero\", \n    \"ExpressionAttributeValues\": { \n      \":ptype\": { \n        \"S\": $inputData.productType \n      }, \n      \":zero\": { \n        \"N\": \"0\"\n      } \n    }, \n    \"Limit\": ($inputData.limit ? $inputData.limit : 20) \n  }, \n  $inputData.nextPageKey ? { \n    \"ExclusiveStartKey\": $inputData.nextPageKey \n  } : {}\n]) %}",
+            "Arguments": "{% $merge([\n  { \n    \"TableName\": \"${self:custom.InventoryTableName}\", \n    \"IndexName\": \"tipo_id-index\", \n    \"KeyConditionExpression\": \"productType = :ptype\", \n    \"FilterExpression\": \"stock > :zero\", \n    \"ExpressionAttributeValues\": { \n      \":ptype\": { \n        \"S\": $inputData.productType ? $inputData.productType : 'PROMOCIONES'\n      }, \n      \":zero\": { \n        \"N\": \"0\"\n      } \n    }, \n    \"Limit\": $limit\n  }, \n  $inputData.nextPageKey ? { \n    \"ExclusiveStartKey\": $inputData.nextPageKey \n  } : {}\n]) %}",
             "Next": "Notificar: Stock listado",
             "Assign": {
                 "items": "{% $states.result.Items %}",
@@ -73,7 +74,7 @@
                         "Source": "app.inventory",
                         "DetailType": "Producto.ListadoExitoso",
                         "EventBusName": "${EventBusName}",
-                        "Detail": "{% $string({\n  \"meta\": $originalMeta,\n  \"ui\": {\n    \"action\": \"HYDRATE\",\n    \"target\": \"products_store\",\n    \"variant\": \"SUCCESS\",\n    \"message\": \"Productos cargados\"\n  },\n  \"data\": {\n    \"products\": $items,\n    \"nextPageKey\": $lastKey\n  }}) %}"
+                        "Detail": "{% $string({\n  \"meta\": $merge([\n    $meta,{\n      \"scope\": \"NOTIFICATION\",\n      \"targetType\": \"CONNECTION\",\n      \"targetId\": $connectionId\n    }]),\n  \"ui\": {\n    \"action\": \"HYDRATE\",\n    \"target\": \"products_store\",\n    \"variant\": \"SUCCESS\",\n    \"message\": \"Productos cargados\"\n  },\n  \"data\": {\n    \"products\": $items,\n    \"nextPageKey\": $lastKey\n  }}) %}"
                     }
                 ]
             },
@@ -140,7 +141,7 @@
                         "Source": "app.inventory",
                         "DetailType": "Stock.Liberado",
                         "EventBusName": "${EventBusName}",
-                        "Detail": "{% $string({\n            \"meta\": $meta,\n            \"data\": { \"orderId\": $inputData.orderId, \"status\": \"ROLLBACK_OK\" }\n          }) %}"
+                        "Detail": "{% $string({\n            \"meta\": $merge([\n              $meta,{\n                \"scope\": \"NOTIFICATION\",\n                \"targetType\": \"USER\",\n                \"targetId\": $meta.userId\n              }]),\n            \"data\": { \"orderId\": $inputData.orderId, \"status\": \"ROLLBACK_OK\" }\n          }) %}"
                     }
                 ]
             },

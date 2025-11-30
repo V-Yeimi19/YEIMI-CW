@@ -8,7 +8,7 @@
                 "meta": "{% $states.input.detail.meta %}",
                 "inputData": "{% $states.input.detail.data %}",
                 "connectionId": "{% $states.input.detail.meta.connectionId %}",
-                "eventType": "{% $states.input['detail-type'] %}"
+                "eventType": "{% $states.input.'detail-type' %}"
             },
             "Next": "Selector de Evento"
         },
@@ -56,6 +56,15 @@
                 ]
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
+            "Next": "Auto-Confirmar Manager"
+        },
+        "Auto-Confirmar Manager": {
+            "Type": "Task",
+            "Arguments": {
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.email %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminConfirmSignUp",
             "Next": "Agregar a grupo de Managers"
         },
         "Agregar a grupo de Managers": {
@@ -112,7 +121,7 @@
                         "Source": "app.session",
                         "DetailType": "Auth.ManagerRegistrado",
                         "EventBusName": "${self:custom.EventBusName}",
-                        "Detail": "{% $string({\n          \"meta\": $meta,\n          \"ui\": { \n            \"action\": \"SHOW_TOAST\", \n            \"variant\": \"SUCCESS\", \n            \"message\": \"Manager creado para la sucursal \" & $inputData.sucursal \n          }\n}) %}"
+                        "Detail": "{% $string({\n          \"meta\": $merge([\n              $meta,{\n                \"scope\": \"NOTIFICATION\",\n                \"targetType\": \"TENANT\",\n                \"targetId\": \"ADMIN\"\n              }]),\n          \"ui\": { \n            \"action\": \"SHOW_TOAST\", \n            \"variant\": \"SUCCESS\", \n            \"message\": \"Manager creado para la sucursal \" & $inputData.sucursal \n          }\n}) %}"
                     }
                 ]
             },
@@ -193,7 +202,7 @@
                         "Source": "app.session",
                         "DetailType": "Auth.LoginFallido",
                         "EventBusName": "${self:custom.EventBusName}",
-                        "Detail": "{% $string({ \n  \"meta\": $meta, \n  \"ui\": { \n    \"action\": \"SHOW_TOAST\", \n    \"variant\": \"ERROR\", \n    \"message\": \"Credenciales inválidas o no tienes permisos.\" \n  } \n}) %}"
+                        "Detail": "{% $string({ \n  \"meta\": $merge([\n    $meta,{\n      \"scope\": \"NOTIFICATION\",\n      \"targetType\": \"CONNECTION\",\n      \"targetId\": $connectionId\n    }]), \n  \"ui\": { \n    \"action\": \"SHOW_TOAST\", \n    \"variant\": \"ERROR\", \n    \"message\": \"Credenciales inválidas o no tienes permisos.\" \n  } \n}) %}"
                     }
                 ]
             },
@@ -296,7 +305,7 @@
                         "Source": "app.session",
                         "DetailType": "Auth.LoginExitoso",
                         "EventBusName": "${self:custom.EventBusName}",
-                        "Detail": "{% $string({\n            \"meta\": $meta,\n            \"ui\": { \n              \"action\": \"HYDRATE\", \n              \"target\": \"session_store\", \n              \"variant\": \"SUCCESS\", \n              \"message\": \"Bienvenido\" \n            },\n            \"data\": { \n              \"accessToken\": $authResult.AccessToken, \n              \"idToken\": $authResult.IdToken, \n              \"role\": ($eventType = 'Auth.LoginManager' ? 'MANAGER' : 'CLIENT') }\n}) %}"
+                        "Detail": "{% $string({\n            \"meta\": $merge([\n              $meta,{\n                \"scope\": \"NOTIFICATION\",\n                \"targetType\": \"CONNECTION\",\n                \"targetId\": $connectionId\n              }]),\n            \"ui\": { \n              \"action\": \"HYDRATE\", \n              \"target\": \"session_store\", \n              \"variant\": \"SUCCESS\", \n              \"message\": \"Bienvenido\" \n            },\n            \"data\": { \n              \"accessToken\": $authResult.AccessToken, \n              \"idToken\": $authResult.IdToken, \n              \"role\": ($eventType = 'Auth.LoginManager' ? 'MANAGER' : 'CLIENT') \n            }\n}) %}"
                     }
                 ]
             },
@@ -306,7 +315,7 @@
             "Type": "Task",
             "Arguments": {
                 "ClientId": "${self:custom.UserPoolClientId}",
-                "Username": "{% $inputData.gmail %}",
+                "Username": "{% $inputData.email %}",
                 "Password": "{% $inputData.password %}",
                 "UserAttributes": [
                     {
@@ -323,6 +332,15 @@
                 "userSub": "{% $states.result.UserSub %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:signUp",
+            "Next": "Auto-Confirmar Clientes"
+        },
+        "Auto-Confirmar Clientes": {
+            "Type": "Task",
+            "Arguments": {
+                "UserPoolId": "${self:custom.UserPoolId}",
+                "Username": "{% $inputData.email %}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminConfirmSignUp",
             "Next": "Agregar a Grupo de Clientes"
         },
         "Agregar a Grupo de Clientes": {
@@ -330,7 +348,7 @@
             "Arguments": {
                 "GroupName": "Clientes",
                 "UserPoolId": "${self:custom.UserPoolId}",
-                "Username": "{% $inputData.gmail %}"
+                "Username": "{% $inputData.email %}"
             },
             "Resource": "arn:aws:states:::aws-sdk:cognitoidentityprovider:adminAddUserToGroup",
             "Next": "Guardar Cliente en DB"
@@ -369,52 +387,21 @@
                     }
                 }
             },
-            "Next": "Notificacion Paralela"
+            "Next": "Notificar: A Conexion"
         },
-        "Notificacion Paralela": {
-            "Type": "Parallel",
-            "Branches": [
-                {
-                    "StartAt": "Notificar: A Conexion",
-                    "States": {
-                        "Notificar: A Conexion": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::events:putEvents",
-                            "Arguments": {
-                                "Entries": [
-                                    {
-                                        "Source": "app.session",
-                                        "DetailType": "Auth.RegistroExitoso",
-                                        "EventBusName": "${self:custom.EventBusName}",
-                                        "Detail": "{% $string({\n      \"meta\": $meta, \n      \"ui\": { \n        \"action\": \"SHOW_TOAST\", \n        \"variant\": \"SUCCESS\", \n        \"message\": \"Cuenta creada exitosamente\" \n      }\n}) %}"
-                                    }
-                                ]
-                            },
-                            "End": true
-                        }
+        "Notificar: A Conexion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "Source": "app.session",
+                        "DetailType": "Auth.RegistroExitoso",
+                        "EventBusName": "${self:custom.EventBusName}",
+                        "Detail": "{% $string({\n      \"meta\": $merge([\n        $meta,{\n          \"scope\": \"NOTIFICATION\",\n          \"targetType\": \"CONNECTION\",\n          \"targetId\": $connectionId\n        }\n      ]), \n      \"ui\": { \n        \"action\": \"SHOW_TOAST\", \n        \"variant\": \"SUCCESS\", \n        \"message\": \"Cuenta creada exitosamente\" \n      }\n}) %}"
                     }
-                },
-                {
-                    "StartAt": "Notificar: A manager",
-                    "States": {
-                        "Notificar: A manager": {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::events:putEvents",
-                            "Arguments": {
-                                "Entries": [
-                                    {
-                                        "Source": "app.session",
-                                        "DetailType": "Auth.NuevoClienteRegistrado",
-                                        "EventBusName": "${self:custom.EventBusName}",
-                                        "Detail": "{% $string({\n          \"meta\": {\n              \"scope\": \"NOTIFICATION\",\n              \"targetType\": \"TENANT\",\n              \"targetId\": \"MANAGERS_GLOBAL\",\n              \"correlationId\": $meta.correlationId\n          },\n          \"ui\": { \n              \"action\": \"SHOW_TOAST\", \n              \"variant\": \"INFO\", \n              \"message\": \"Nuevo cliente registrado: \" & $inputData.name \n          },\n          \"data\": { \n            \"userId\": $userSub \n          }\n}) %}"
-                                    }
-                                ]
-                            },
-                            "End": true
-                        }
-                    }
-                }
-            ],
+                ]
+            },
             "End": true
         },
         "Refresh TTL de conexion": {
@@ -448,7 +435,7 @@
                         "Source": "app.session",
                         "DetailType": "System.Pong",
                         "EventBusName": "${self:custom.EventBusName}",
-                        "Detail": "{% $string({ \n  \"meta\": $meta,\n  \"ui\": { \n    \"action\": \"SILENT\", \n    \"message\": \"Pong\" \n  } \n}) %}"
+                        "Detail": "{% $string({ \n  \"meta\": $merge([\n    $meta,{\n      \"scope\": \"NOTIFICATION\",\n      \"targetType\": \"CONNECTION\",\n      \"targetId\": $connectionId\n    }\n  ]),\n  \"ui\": { \n    \"action\": \"SILENT\", \n    \"message\": \"Pong!\" \n  } \n}) %}"
                     }
                 ]
             },

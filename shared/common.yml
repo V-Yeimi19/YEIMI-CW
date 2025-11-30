@@ -27,6 +27,8 @@ provider:
       Fn::ImportValue: cw-users-table-name-${self:provider.stage}
     INVENTORY_TABLE_NAME:
       Fn::ImportValue: cw-inventory-table-name-${self:provider.stage}
+    UNIVERSAL_RELAY_ARN:
+      Fn::ImportValue: cw-universal-relay-arn-${self:provider.stage}
 
 # Configuración centralizada de Esbuild
 custom:

@@ -14,11 +14,11 @@ custom:
   # Heredamos la configuración de esbuild del archivo común
   esbuild: ${self:custom.common.custom.esbuild}
 
-  UserPoolClientId: ${cf:cw-infra-shared-${self:provider.stage}.UserPoolClientId}
-  UserPoolId: ${cf:cw-infra-shared-${self:provider.stage}.UserPoolId}
-  UsersTableName: ${cf:cw-infra-shared-${self:provider.stage}.UsersTableName}
-  ConnectionsTableName: ${cf:cw-infra-shared-${self:provider.stage}.ConnectionsTableName}
-  EventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+  UserPoolClientId: ${self:custom.common.provider.environment.USER_POOL_CLIENT_ID}
+  UserPoolId: ${self:custom.common.provider.environment.USER_POOL_ID}
+  UsersTableName: ${self:custom.common.provider.environment.USERS_TABLE}
+  ConnectionsTableName: ${self:custom.common.provider.environment.CONNECTIONS_TABLE}
+  EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
 
 # 3. PLUGINS (Se deben listar explícitamente en cada servicio)
 plugins:
@@ -117,7 +117,7 @@ resources:
         Targets:
           - Id: RelayToBus
           
-            Arn: ${cf:cw-infra-shared-${self:provider.stage}.UniversalRelayArn}
+            Arn: ${self:custom.common.provider.environment.UNIVERSAL_RELAY_ARN}
 
             # Transformamos el evento feo en una Notificación bonita para el Frontend
             InputTransformer:
