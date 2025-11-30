@@ -2,5 +2,8 @@
   "name": "delivery-ms",
   "version": "1.0.0",
   "description": "Microservicio de Delivery para gestion de asignacion y actualizacion de estados de pedidos",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^20.19.25"
+  }
 }
