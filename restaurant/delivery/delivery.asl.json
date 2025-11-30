@@ -1,10 +1,11 @@
 {
     "Comment": "Microservicio Delivery - Event-driven con formato estandarizado de notificaciones",
+    "QueryLanguage": "JSONata",
     "StartAt": "IdentificarTipoEvento",
     "States": {
         "IdentificarTipoEvento": {
             "Type": "Choice",
-            "Comment": "Enruta segun el tipo de evento recibido",
+            "Comment": "Enruta según el tipo de evento recibido",
             "Choices": [
                 {
                     "Condition": "{% $states.input['detail-type'] = 'PagoConfirmado' %}",
@@ -30,7 +31,7 @@
             "Comment": "Busca un cocinero disponible usando GSI tenant_context + Role",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
             "Arguments": {
-                "TableName": "${UsuariosTable}",
+                "TableName": "${UsuariosTableName}",
                 "IndexName": "TenantRoleIndex",
                 "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
                 "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
@@ -50,7 +51,7 @@
                 },
                 "Limit": 1
             },
-            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'cocinero': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Output": "{% $states.input.detail ? {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'cocinero': $states.result.Items[0] ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} : {'cocinero': null} %}",
             "Next": "ValidarCocineroEncontrado"
         },
         "ValidarCocineroEncontrado": {
@@ -68,7 +69,7 @@
             "Comment": "Crea registro con entity=EnPreparacion",
             "Resource": "arn:aws:states:::dynamodb:putItem",
             "Arguments": {
-                "TableName": "${PedidosTable}",
+                "TableName": "${PedidosTableName}",
                 "Item": {
                     "pedido_id": {
                         "S": "{% 'Pedido#' & $states.input.orderId %}"
@@ -125,7 +126,7 @@
                         "EnviarEmailPreparacion": {
                             "Type": "Task",
                             "Comment": "Lambda sendEmail - Notifica preparación via SendGrid",
-                            "Resource": "${SendEmailLambdaArn}",
+                            "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:delivery-ms-${self:provider.stage}-sendEmail",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
                                 "subject": "Tu pedido está en preparación - China Wok",
@@ -153,7 +154,7 @@
                         },
                         "EmailFallidoPreparacion": {
                             "Type": "Pass",
-                            "Comment": "Error al enviar email",
+                            "Comment": "Error al enviar email - continuar",
                             "End": true
                         }
                     }
@@ -208,7 +209,7 @@
             "Comment": "Busca despachador usando GSI",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
             "Arguments": {
-                "TableName": "${UsuariosTable}",
+                "TableName": "${UsuariosTableName}",
                 "IndexName": "TenantRoleIndex",
                 "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
                 "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
@@ -228,7 +229,7 @@
                 },
                 "Limit": 1
             },
-            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'cocineroId': $states.input.detail.cocineroId, 'despachador': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Output": "{% $states.input.detail ? {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'cocineroId': $states.input.detail.cocineroId, 'despachador': $states.result.Items[0] ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} : {'despachador': null} %}",
             "Next": "ValidarDespachadorEncontrado"
         },
         "ValidarDespachadorEncontrado": {
@@ -246,7 +247,7 @@
             "Comment": "Crea registro con entity=EnDespacho",
             "Resource": "arn:aws:states:::dynamodb:putItem",
             "Arguments": {
-                "TableName": "${PedidosTable}",
+                "TableName": "${PedidosTableName}",
                 "Item": {
                     "pedido_id": {
                         "S": "{% 'Pedido#' & $states.input.orderId %}"
@@ -302,7 +303,7 @@
                         "EnviarEmailDespacho": {
                             "Type": "Task",
                             "Comment": "Lambda sendEmail - Notifica despacho via SendGrid",
-                            "Resource": "${SendEmailLambdaArn}",
+                            "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:delivery-ms-${self:provider.stage}-sendEmail",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
                                 "subject": "Tu pedido está siendo empacado - China Wok",
@@ -330,7 +331,7 @@
                         },
                         "EmailFallidoDespacho": {
                             "Type": "Pass",
-                            "Comment": "Error al enviar email",
+                            "Comment": "Error al enviar email - continuar",
                             "End": true
                         }
                     }
@@ -384,7 +385,7 @@
             "Comment": "Busca repartidor usando GSI",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
             "Arguments": {
-                "TableName": "${UsuariosTable}",
+                "TableName": "${UsuariosTableName}",
                 "IndexName": "TenantRoleIndex",
                 "KeyConditionExpression": "tenant_context = :tenantContext AND #role = :role",
                 "FilterExpression": "attribute_exists(atributos) AND contains(atributos, :activo)",
@@ -404,7 +405,7 @@
                 },
                 "Limit": 1
             },
-            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'despachadorId': $states.input.detail.despachadorId, 'repartidor': $states.result.Items[0] != undefined ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} %}",
+            "Output": "{% $states.input.detail ? {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'despachadorId': $states.input.detail.despachadorId, 'repartidor': $states.result.Items[0] ? {'userId': $states.result.Items[0].user_id.S, 'nombre': $eval($states.result.Items[0].atributos.S).nombre} : null} : {'repartidor': null} %}",
             "Next": "ValidarRepartidorEncontrado"
         },
         "ValidarRepartidorEncontrado": {
@@ -422,7 +423,7 @@
             "Comment": "Crea registro con entity=EnCamino",
             "Resource": "arn:aws:states:::dynamodb:putItem",
             "Arguments": {
-                "TableName": "${PedidosTable}",
+                "TableName": "${PedidosTableName}",
                 "Item": {
                     "pedido_id": {
                         "S": "{% 'Pedido#' & $states.input.orderId %}"
@@ -478,7 +479,7 @@
                         "EnviarEmailEnCamino": {
                             "Type": "Task",
                             "Comment": "Lambda sendEmail - Notifica envío via SendGrid",
-                            "Resource": "${SendEmailLambdaArn}",
+                            "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:delivery-ms-${self:provider.stage}-sendEmail",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
                                 "subject": "¡Tu pedido está en camino! - China Wok",
@@ -506,7 +507,7 @@
                         },
                         "EmailFallidoEnCamino": {
                             "Type": "Pass",
-                            "Comment": "Error al enviar email",
+                            "Comment": "Error al enviar email - continuar",
                             "End": true
                         }
                     }
@@ -561,7 +562,7 @@
             "Comment": "Crea registro con entity=Entregado",
             "Resource": "arn:aws:states:::dynamodb:putItem",
             "Arguments": {
-                "TableName": "${PedidosTable}",
+                "TableName": "${PedidosTableName}",
                 "Item": {
                     "pedido_id": {
                         "S": "{% 'Pedido#' & $states.input.detail.orderId %}"
@@ -606,7 +607,7 @@
                     }
                 }
             },
-            "Output": "{% {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'confirmationCode': $states.input.detail.confirmationCode} %}",
+            "Output": "{% $states.input.detail ? {'orderId': $states.input.detail.orderId, 'sucursalId': $states.input.detail.sucursalId, 'customerId': $states.input.detail.customerId, 'customerEmail': $states.input.detail.customerEmail, 'correlationId': $states.input.detail.correlationId ? $states.input.detail.correlationId : $uuid(), 'confirmationCode': $states.input.detail.confirmationCode} : {} %}",
             "Next": "PublicarEventoEntregado"
         },
         "PublicarEventoEntregado": {
@@ -618,7 +619,7 @@
                         "EnviarEmailEntregado": {
                             "Type": "Task",
                             "Comment": "Lambda sendEmail - Notifica entrega via SendGrid",
-                            "Resource": "${SendEmailLambdaArn}",
+                            "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:delivery-ms-${self:provider.stage}-sendEmail",
                             "Arguments": {
                                 "to": "{% $states.input.customerEmail %}",
                                 "subject": "¡Pedido entregado exitosamente! - China Wok",
@@ -646,7 +647,7 @@
                         },
                         "EmailFallidoEntregado": {
                             "Type": "Pass",
-                            "Comment": "Error al enviar email",
+                            "Comment": "Error al enviar email - continuar",
                             "End": true
                         }
                     }
@@ -715,6 +716,5 @@
             "Comment": "Evento no reconocido - se ignora",
             "End": true
         }
-    },
-    "QueryLanguage": "JSONata"
+    }
 }

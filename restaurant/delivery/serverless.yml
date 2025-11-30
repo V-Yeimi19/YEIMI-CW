@@ -1,24 +1,37 @@
-service: delivery-ms 
+service: delivery-ms
 
-# CRÍTICO: dotenv-plugin DEBE ir PRIMERO
-plugins:
-  - serverless-dotenv-plugin
-  - serverless-esbuild
-
-  
+# ==========================================================
+# 1. CUSTOM CONFIG
+# ==========================================================
 custom:
   common: ${file(../../shared/common.yml)}
 
-  # CRÍTICO: dotenv DEBE estar configurado ANTES de usarse
   dotenv:
     path: ../../.env
     logging: true
     required:
       env:
         - SENDGRID_API_KEY
+        - FROM_EMAIL
 
   esbuild: ${self:custom.common.custom.esbuild}
 
+  # Recursos compartidos
+  UsuariosTableName: ${cf:cw-infra-shared-${self:provider.stage}.UsuariosTableName}
+  PedidosTableName: ${cf:cw-infra-shared-${self:provider.stage}.PedidosTableName}
+  EventBusName: ${cf:cw-infra-shared-${self:provider.stage}.BusNameExport}
+
+# ==========================================================
+# 2. PLUGINS
+# ==========================================================
+plugins:
+  - serverless-esbuild
+  - serverless-step-functions
+  - serverless-dotenv-plugin
+
+# ==========================================================
+# 3. PROVIDER
+# ==========================================================
 provider:
   name: ${self:custom.common.provider.name}
   runtime: ${self:custom.common.provider.runtime}
@@ -27,105 +40,142 @@ provider:
   memorySize: ${self:custom.common.provider.memorySize}
   timeout: ${self:custom.common.provider.timeout}
 
-  # Heredar la configuración de IAM (NO 'role' directamente)
   iam: ${self:custom.common.provider.iam}
 
   environment:
-    EVENT_BUS_NAME: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+    EVENT_BUS_NAME: ${self:custom.EventBusName}
+    USUARIOS_TABLE: ${self:custom.UsuariosTableName}
+    PEDIDOS_TABLE: ${self:custom.PedidosTableName}
     SENDGRID_API_KEY: ${.env:SENDGRID_API_KEY}
-    FROM_EMAIL: ${.env:FROM_EMAIL, 'notificaciones@chinawok.com'}
+    FROM_EMAIL: ${.env:FROM_EMAIL}
+    NODE_OPTIONS: --enable-source-maps
 
+# ==========================================================
+# 4. LAMBDAS
+# ==========================================================
 functions:
   sendEmail:
     handler: src/sendEmail.handler
     description: Envía emails usando SendGrid API
-    environment:
-      SENDGRID_API_KEY: ${.env:SENDGRID_API_KEY}
-      FROM_EMAIL: ${.env:FROM_EMAIL, 'notificaciones@chinawok.com'}
+    timeout: 30
+    memorySize: 1024
 
+# ==========================================================
+# 5. STEP FUNCTION
+# ==========================================================
+stepFunctions:
+  stateMachines:
+    DeliveryFlow:
+      name: ms-delivery-${self:provider.stage}
+      type: EXPRESS
+      role: ${self:custom.common.provider.iam.role}
+      definition: ${file(delivery.asl.json)}
+      loggingConfig:
+        level: ALL
+        includeExecutionData: true
+        destinations:
+          - !GetAtt DeliveryLogGroup.Arn
+      tracingConfig:
+        enabled: true
+
+# ==========================================================
+# 6. RESOURCES - EventBridge Rules + DynamoDB
+# ==========================================================
 resources:
   Resources:
-    DeliveryStateMachine:
-      Type: AWS::StepFunctions::StateMachine
+    # Log Group para Step Functions
+    DeliveryLogGroup:
+      Type: AWS::Logs::LogGroup
       Properties:
-        StateMachineName: DeliveryStateMachine-${self:provider.stage}
-        # Usar Fn::Sub para obtener el AccountId dinámicamente
-        RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-        DefinitionString:
-          Fn::Sub:
-            - ${FileContent}
-            - FileContent: ${file(./delivery.asl.json)}
-              UsuariosTable: ${cf:cw-infra-shared-dev.UsuariosTableName}
-              PedidosTable: ${cf:cw-infra-shared-dev.PedidosTableName}
-              EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
-              SendEmailLambdaArn:
-                Fn::GetAtt:
-                  - SendEmailLambdaFunction
-                  - Arn
+        LogGroupName: /aws/vendedlogs/states/cw-delivery-ms-${self:provider.stage}
+        RetentionInDays: 7
 
-
+    # REGLA 1: PagoConfirmado
     PagoConfirmadoRule:
       Type: AWS::Events::Rule
       Properties:
-        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        Name: ms-delivery-${self:provider.stage}-PagoConfirmado
+        EventBusName: ${self:custom.EventBusName}
+        State: ENABLED
         EventPattern:
           source:
             - payment.service
           detail-type:
             - PagoConfirmado
-        State: ENABLED
         Targets:
-          - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-            Id: DeliveryStateMachineTarget
+          - Arn: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ms-delivery-${self:provider.stage}"
+            RoleArn: ${self:custom.common.provider.iam.role}
+            Id: delivery-pago-confirmado
 
+    # REGLA 2: ComidaPreparada
     ComidaPreparadaRule:
       Type: AWS::Events::Rule
       Properties:
-        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        Name: ms-delivery-${self:provider.stage}-ComidaPreparada
+        EventBusName: ${self:custom.EventBusName}
+        State: ENABLED
         EventPattern:
           source:
             - kitchen.service
           detail-type:
             - ComidaPreparada
-        State: ENABLED
         Targets:
-          - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-            Id: DeliveryStateMachineTarget
+          - Arn: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ms-delivery-${self:provider.stage}"
+            RoleArn: ${self:custom.common.provider.iam.role}
+            Id: delivery-comida-preparada
 
+    # REGLA 3: Despachado
     DespachadoRule:
       Type: AWS::Events::Rule
       Properties:
-        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        Name: ms-delivery-${self:provider.stage}-Despachado
+        EventBusName: ${self:custom.EventBusName}
+        State: ENABLED
         EventPattern:
           source:
             - packing.service
           detail-type:
             - Despachado
-        State: ENABLED
         Targets:
-          - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-            Id: DeliveryStateMachineTarget
+          - Arn: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ms-delivery-${self:provider.stage}"
+            RoleArn: ${self:custom.common.provider.iam.role}
+            Id: delivery-despachado
 
+    # REGLA 4: Entregado
     EntregadoRule:
       Type: AWS::Events::Rule
       Properties:
-        EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+        Name: ms-delivery-${self:provider.stage}-Entregado
+        EventBusName: ${self:custom.EventBusName}
+        State: ENABLED
         EventPattern:
           source:
             - driver.service
           detail-type:
             - Entregado
-        State: ENABLED
         Targets:
-          - Arn: !GetAtt DeliveryStateMachine.Arn
-            RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-            Id: DeliveryStateMachineTarget
+          - Arn: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ms-delivery-${self:provider.stage}"
+            RoleArn: ${self:custom.common.provider.iam.role}
+            Id: delivery-entregado
 
+  # ==========================================================
+  # OUTPUTS
+  # ==========================================================
   Outputs:
     DeliveryStateMachineArn:
-      Value: !GetAtt DeliveryStateMachine.Arn
+      Description: ARN de la Step Function Delivery
+      Value: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ms-delivery-${self:provider.stage}"
       Export:
         Name: ${self:service}-${self:provider.stage}-StateMachineArn
+
+    SendEmailLambdaArn:
+      Description: ARN de la Lambda de envío de email
+      Value: !GetAtt SendEmailLambdaFunction.Arn
+      Export:
+        Name: ${self:service}-${self:provider.stage}-SendEmailArn
+
+    EventBusName:
+      Description: Nombre del Event Bus
+      Value: ${self:custom.EventBusName}
+      Export:
+        Name: ${self:service}-${self:provider.stage}-EventBusName
