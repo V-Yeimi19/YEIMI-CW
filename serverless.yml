@@ -1,9 +1,5 @@
 service: cw-infra-shared
 
-plugins:
-  - serverless-esbuild
-  - serverless-dotenv-plugin # Por si acaso
-
 provider:
   name: aws
   runtime: nodejs18.x
@@ -18,6 +14,10 @@ provider:
   
   iam: 
     role: arn:aws:iam::${aws:accountId}:role/LabRole
+
+plugins:
+  - serverless-esbuild
+  - serverless-dotenv-plugin # Por si acaso
 
 custom:
   dotenv:
@@ -91,8 +91,7 @@ resources:
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
-      
-      
+
     # ---------------------------------------------------
     # TABLA DE CONEXIONES WEBSOCKET
     # ---------------------------------------------------
@@ -140,10 +139,41 @@ resources:
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
+    
+    # ---------------------------------------------------
+    # TABLA DE USUARIOS
+    # ---------------------------------------------------
+    UsuariosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: cw-usuarios-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: entity_type
+            AttributeType: S
+          - AttributeName: tenant_context
+            AttributeType: S
+          - AttributeName: Role
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: entity_type
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: TenantRoleIndex
+            KeySchema:
+              - AttributeName: tenant_context
+                KeyType: HASH
+              - AttributeName: Role
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
 
-  # ---------------------------------------------------
-  # OUTPUTS (Para compartir con otros stacks)
-  # ---------------------------------------------------
+
+  # 2. Exportamos los valores para que los microservicios los lean
   Outputs:
     # URL base del WebSocket
     # NOTA: Al agregar la sección 'functions' con eventos websocket, 
@@ -163,7 +193,7 @@ resources:
             - ${self:provider.stage}
       Export:
         Name: cw-websocket-endpoint-${self:provider.stage}
-
+    
     # NOMBRE de la Bus de Eventos
     BusNameExport:
       Value: !Ref CentralEventBus
@@ -203,4 +233,15 @@ resources:
       Value: !GetAtt ConnectionsTable.Arn
       Export:
         Name: cw-connections-table-arn-${self:provider.stage}
-        
+    
+    # NOMBRE de la tabla
+    UsuariosTableName:
+        Value: !Ref UsuariosTable
+        Export:
+          Name: cw-usuarios-table-name-${self:provider.stage}
+    
+    # ARN de la tabla
+    UsuariosTableArn:
+        Value: !GetAtt UsuariosTable.Arn
+        Export:
+          Name: cw-usuarios-table-arn-${self:provider.stage}
