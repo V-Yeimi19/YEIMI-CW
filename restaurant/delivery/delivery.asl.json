@@ -61,7 +61,7 @@
                     "Next": "AsignarCocineroAlPedido"
                 }
             ],
-            "Default": "ErrorNoHayCocineros"
+            "Default": "FailNoCocineros"
         },
         "AsignarCocineroAlPedido": {
             "Type": "Task",
@@ -124,24 +124,12 @@
                     "States": {
                         "EnviarEmailPreparacion": {
                             "Type": "Task",
-                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Comment": "Lambda sendEmail - Notifica preparación via SendGrid",
+                            "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
-                                "Source": "${SesFromEmail}",
-                                "Destination": {
-                                    "ToAddresses": [
-                                        "{% $states.input.customerEmail %}"
-                                    ]
-                                },
-                                "Message": {
-                                    "Subject": {
-                                        "Data": "Tu pedido está en preparación - China Wok"
-                                    },
-                                    "Body": {
-                                        "Html": {
-                                            "Data": "{% '<html><body><h2>¡Tu pedido está siendo preparado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al cocinero <strong>' & $states.input.cocinero.nombre & '</strong>.</p><p>Estado: <strong>EN PREPARACIÓN</strong></p><p>Gracias por tu preferencia.</p><p>China Wok</p></body></html>' %}"
-                                        }
-                                    }
-                                }
+                                "to": "{% $states.input.customerEmail %}",
+                                "subject": "Tu pedido está en preparación - China Wok",
+                                "htmlContent": "{% '<html><body><h2>¡Tu pedido está siendo preparado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al cocinero <strong>' & $states.input.cocinero.nombre & '</strong>.</p><p>Estado: <strong>EN PREPARACIÓN</strong></p><p>Gracias por tu preferencia.</p><p>China Wok</p></body></html>' %}"
                             },
                             "Retry": [
                                 {
@@ -165,6 +153,7 @@
                         },
                         "EmailFallidoPreparacion": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -250,7 +239,7 @@
                     "Next": "AsignarDespachadorAlPedido"
                 }
             ],
-            "Default": "ErrorNoHayDespachadores"
+            "Default": "FailNoDespachadores"
         },
         "AsignarDespachadorAlPedido": {
             "Type": "Task",
@@ -312,24 +301,12 @@
                     "States": {
                         "EnviarEmailDespacho": {
                             "Type": "Task",
-                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Comment": "Lambda sendEmail - Notifica despacho via SendGrid",
+                            "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
-                                "Source": "${SesFromEmail}",
-                                "Destination": {
-                                    "ToAddresses": [
-                                        "{% $states.input.customerEmail %}"
-                                    ]
-                                },
-                                "Message": {
-                                    "Subject": {
-                                        "Data": "Tu pedido está siendo empacado - China Wok"
-                                    },
-                                    "Body": {
-                                        "Html": {
-                                            "Data": "{% '<html><body><h2>¡Tu pedido está siendo empacado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al despachador <strong>' & $states.input.despachador.nombre & '</strong>.</p><p>Estado: <strong>EN DESPACHO</strong></p><p>Pronto estará listo para envío.</p><p>China Wok</p></body></html>' %}"
-                                        }
-                                    }
-                                }
+                                "to": "{% $states.input.customerEmail %}",
+                                "subject": "Tu pedido está siendo empacado - China Wok",
+                                "htmlContent": "{% '<html><body><h2>¡Tu pedido está siendo empacado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al despachador <strong>' & $states.input.despachador.nombre & '</strong>.</p><p>Estado: <strong>EN DESPACHO</strong></p><p>Pronto estará listo para envío.</p><p>China Wok</p></body></html>' %}"
                             },
                             "Retry": [
                                 {
@@ -346,13 +323,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoDespacho"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoDespacho": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -437,7 +415,7 @@
                     "Next": "AsignarRepartidorAlPedido"
                 }
             ],
-            "Default": "ErrorNoHayRepartidores"
+            "Default": "FailNoRepartidores"
         },
         "AsignarRepartidorAlPedido": {
             "Type": "Task",
@@ -499,24 +477,12 @@
                     "States": {
                         "EnviarEmailEnCamino": {
                             "Type": "Task",
-                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Comment": "Lambda sendEmail - Notifica envío via SendGrid",
+                            "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
-                                "Source": "${SesFromEmail}",
-                                "Destination": {
-                                    "ToAddresses": [
-                                        "{% $states.input.customerEmail %}"
-                                    ]
-                                },
-                                "Message": {
-                                    "Subject": {
-                                        "Data": "¡Tu pedido está en camino! - China Wok"
-                                    },
-                                    "Body": {
-                                        "Html": {
-                                            "Data": "{% '<html><body><h2>¡Tu pedido está en camino!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al repartidor <strong>' & $states.input.repartidor.nombre & '</strong>.</p><p>Estado: <strong>EN CAMINO</strong></p><p>Llegará pronto a tu dirección.</p><p>China Wok</p></body></html>' %}"
-                                        }
-                                    }
-                                }
+                                "to": "{% $states.input.customerEmail %}",
+                                "subject": "¡Tu pedido está en camino! - China Wok",
+                                "htmlContent": "{% '<html><body><h2>¡Tu pedido está en camino!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido asignado al repartidor <strong>' & $states.input.repartidor.nombre & '</strong>.</p><p>Estado: <strong>EN CAMINO</strong></p><p>Llegará pronto a tu dirección.</p><p>China Wok</p></body></html>' %}"
                             },
                             "Retry": [
                                 {
@@ -533,13 +499,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoEnCamino"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoEnCamino": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -650,24 +617,12 @@
                     "States": {
                         "EnviarEmailEntregado": {
                             "Type": "Task",
-                            "Resource": "arn:aws:states:::aws-sdk:ses:sendEmail",
+                            "Comment": "Lambda sendEmail - Notifica entrega via SendGrid",
+                            "Resource": "${SendEmailLambdaArn}",
                             "Arguments": {
-                                "Source": "${SesFromEmail}",
-                                "Destination": {
-                                    "ToAddresses": [
-                                        "{% $states.input.customerEmail %}"
-                                    ]
-                                },
-                                "Message": {
-                                    "Subject": {
-                                        "Data": "¡Pedido entregado exitosamente! - China Wok"
-                                    },
-                                    "Body": {
-                                        "Html": {
-                                            "Data": "{% '<html><body><h2>¡Tu pedido fue entregado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido entregado exitosamente.</p><p>Estado: <strong>ENTREGADO</strong></p><p>Código de confirmación: <strong>' & $states.input.confirmationCode & '</strong></p><p>¡Gracias por tu preferencia!</p><p>China Wok</p></body></html>' %}"
-                                        }
-                                    }
-                                }
+                                "to": "{% $states.input.customerEmail %}",
+                                "subject": "¡Pedido entregado exitosamente! - China Wok",
+                                "htmlContent": "{% '<html><body><h2>¡Tu pedido fue entregado!</h2><p>Hola,</p><p>Tu pedido <strong>' & $states.input.orderId & '</strong> ha sido entregado exitosamente.</p><p>Estado: <strong>ENTREGADO</strong></p><p>Código de confirmación: <strong>' & $states.input.confirmationCode & '</strong></p><p>¡Gracias por tu preferencia!</p><p>China Wok</p></body></html>' %}"
                             },
                             "Retry": [
                                 {
@@ -684,13 +639,14 @@
                                     "ErrorEquals": [
                                         "States.ALL"
                                     ],
-                                    "Next": "EmailFallido"
+                                    "Next": "EmailFallidoEntregado"
                                 }
                             ],
                             "End": true
                         },
-                        "EmailFallido": {
+                        "EmailFallidoEntregado": {
                             "Type": "Pass",
+                            "Comment": "Error al enviar email",
                             "End": true
                         }
                     }
@@ -739,117 +695,15 @@
             ],
             "End": true
         },
-        "ErrorNoHayCocineros": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents",
-            "Arguments": {
-                "Entries": [
-                    {
-                        "Source": "app.delivery",
-                        "DetailType": "Pedido.ErrorAsignacion",
-                        "Detail": {
-                            "meta": {
-                                "scope": "NOTIFICATION",
-                                "targetType": "ADMIN",
-                                "targetId": "{% $states.input.sucursalId %}",
-                                "correlationId": "{% $states.input.correlationId %}"
-                            },
-                            "ui": {
-                                "action": "SHOW_TOAST",
-                                "variant": "ERROR",
-                                "target": "admin_dashboard",
-                                "message": "No hay cocineros disponibles para procesar el pedido"
-                            },
-                            "data": {
-                                "orderId": "{% $states.input.orderId %}",
-                                "sucursalId": "{% $states.input.sucursalId %}",
-                                "errorType": "NoCocinerosDisponibles",
-                                "timestamp": "{% $now() %}"
-                            }
-                        },
-                        "EventBusName": "${EventBusName}"
-                    }
-                ]
-            },
-            "Next": "FailNoCocineros"
-        },
         "FailNoCocineros": {
             "Type": "Fail",
             "Error": "NoCocinerosDisponibles",
             "Cause": "No hay cocineros activos disponibles en la sucursal"
         },
-        "ErrorNoHayDespachadores": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents",
-            "Arguments": {
-                "Entries": [
-                    {
-                        "Source": "app.delivery",
-                        "DetailType": "Pedido.ErrorAsignacion",
-                        "Detail": {
-                            "meta": {
-                                "scope": "NOTIFICATION",
-                                "targetType": "ADMIN",
-                                "targetId": "{% $states.input.sucursalId %}",
-                                "correlationId": "{% $states.input.correlationId %}"
-                            },
-                            "ui": {
-                                "action": "SHOW_TOAST",
-                                "variant": "ERROR",
-                                "target": "admin_dashboard",
-                                "message": "No hay despachadores disponibles"
-                            },
-                            "data": {
-                                "orderId": "{% $states.input.orderId %}",
-                                "sucursalId": "{% $states.input.sucursalId %}",
-                                "errorType": "NoDespachadoresDisponibles",
-                                "timestamp": "{% $now() %}"
-                            }
-                        },
-                        "EventBusName": "${EventBusName}"
-                    }
-                ]
-            },
-            "Next": "FailNoDespachadores"
-        },
         "FailNoDespachadores": {
             "Type": "Fail",
             "Error": "NoDespachadoresDisponibles",
             "Cause": "No hay despachadores activos disponibles en la sucursal"
-        },
-        "ErrorNoHayRepartidores": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::events:putEvents",
-            "Arguments": {
-                "Entries": [
-                    {
-                        "Source": "app.delivery",
-                        "DetailType": "Pedido.ErrorAsignacion",
-                        "Detail": {
-                            "meta": {
-                                "scope": "NOTIFICATION",
-                                "targetType": "ADMIN",
-                                "targetId": "{% $states.input.sucursalId %}",
-                                "correlationId": "{% $states.input.correlationId %}"
-                            },
-                            "ui": {
-                                "action": "SHOW_TOAST",
-                                "variant": "ERROR",
-                                "target": "admin_dashboard",
-                                "message": "No hay repartidores disponibles"
-                            },
-                            "data": {
-                                "orderId": "{% $states.input.orderId %}",
-                                "sucursalId": "{% $states.input.sucursalId %}",
-                                "errorType": "NoRepartidoresDisponibles",
-                                "timestamp": "{% $now() %}"
-                            }
-                        },
-                        "EventBusName": "${EventBusName}"
-                    }
-                ]
-            },
-            "Next": "FailNoRepartidores"
         },
         "FailNoRepartidores": {
             "Type": "Fail",

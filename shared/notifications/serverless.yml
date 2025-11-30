@@ -17,7 +17,7 @@ provider:
   runtime: ${self:custom.common.provider.runtime}
   region: ${self:custom.common.provider.region}
   stage: ${self:custom.common.provider.stage}
-  role: ${self:custom.common.provider.role}
+  iam: ${self:custom.common.provider.iam}
   environment: ${self:custom.common.provider.environment}
 
 functions:
@@ -88,7 +88,7 @@ resources:
               # Seguridad: Solo permitimos que TU bus escriba aquí
               Condition:
                 ArnEquals:
-                  "aws:SourceArn": ${cf:cw-infra-shared-${self:provider.stage}.BusArnExport}
+                  "aws:SourceArn": !GetAtt NotificationRule.Arn
     
     # 3. La Regla de EventBridge (El Filtro Inteligente)
     NotificationRule:

@@ -27,14 +27,26 @@ provider:
   stage: ${self:custom.common.provider.stage}
   memorySize: ${self:custom.common.provider.memorySize}
   timeout: ${self:custom.common.provider.timeout}
-  
+
   # Heredamos el Rol dinámico (se resuelve con el .env cargado arriba)
   role: ${self:custom.common.provider.role}
 
   # Heredamos variables de entorno globales (EventBus, etc.)
-  environment: ${self:custom.common.provider.environment}
+  environment:
+    EVENT_BUS_NAME: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
+    SENDGRID_API_KEY: ${env:SENDGRID_API_KEY}
+    FROM_EMAIL: ${param:FromEmail, 'notificaciones@chinawok.com'}
 
-# 5. Insfractructura especifica del servicio
+# 5. Funciones Lambda
+functions:
+  sendEmail:
+    handler: src/sendEmail.handler
+    description: Envía emails usando SendGrid API
+    environment:
+      SENDGRID_API_KEY: ${env:SENDGRID_API_KEY}
+      FROM_EMAIL: ${param:FromEmail, 'notificaciones@chinawok.com'}
+
+# 6. Infraestructura especifica del servicio
 resources:
   Resources:
     # Step Function del Delivery
@@ -51,7 +63,7 @@ resources:
               UsuariosTable: ${cf:cw-infra-shared-dev.UsuariosTableName}
               PedidosTable: ${cf:cw-infra-shared-dev.PedidosTableName}
               EventBusName: ${self:custom.common.provider.environment.EVENT_BUS_NAME}
-              SesFromEmail: ${param:SesFromEmail, 'notificaciones@chinawok.com'}
+              SendEmailLambdaArn: !GetAtt SendEmailLambdaFunction.Arn
 
     # Reglas de EventBridge para invocar la Step Function
     PagoConfirmadoRule:
