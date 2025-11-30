@@ -12,7 +12,8 @@ provider:
     POWERTOOLS_SERVICE_NAME: WebSocketService
     NODE_OPTIONS: --enable-source-maps
   
-  role: arn:aws:iam::${env:AWS_ACCOUNT_ID}:role/LabRole
+  iam: 
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
 
 plugins:
   - serverless-esbuild
@@ -65,7 +66,7 @@ resources:
     PedidosTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: Pedidos
+        TableName: cw-pedidos-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: pedido_id
@@ -97,8 +98,7 @@ resources:
     ConnectionsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        # Nombre físico: t_connections_dev, t_connections_prod, etc.
-        TableName: t_connections_${self:provider.stage}
+        TableName: cw-connections-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         
         # Definimos SOLO los atributos que son Keys o Índices
@@ -139,11 +139,14 @@ resources:
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
-
+    
+    # ---------------------------------------------------
+    # TABLA DE USUARIOS
+    # ---------------------------------------------------
     UsuariosTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: Usuarios-${self:provider.stage}
+        TableName: cw-usuarios-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: user_id
@@ -190,33 +193,55 @@ resources:
             - ${self:provider.stage}
       Export:
         Name: cw-websocket-endpoint-${self:provider.stage}
-
+    
     # NOMBRE de la Bus de Eventos
     BusNameExport:
       Value: !Ref CentralEventBus
       Export:
-        Name: ${self:service}-${self:provider.stage}-BusName
+        Name: cw-event-bus-name-${self:provider.stage}
 
     # ARN de la Bus de Eventos
     BusArnExport:
       Value: !GetAtt CentralEventBus.Arn
       Export:
-        Name: ${self:service}-${self:provider.stage}-BusArn
+        Name: cw-event-bus-arn-${self:provider.stage}
 
-
+    # NOMBRE de la tabla
     PedidosTableName:
+      Description: "Nombre de la tabla de pedidos"
       Value: !Ref PedidosTable
       Export:
-        Name: ${self:service}-${self:provider.stage}-PedidosTableName
+        Name: cw-pedidos-table-name-${self:provider.stage}
+
+    # ARN de la tabla
     PedidosTableArn:
+      Description: "ARN de la tabla de pedidos"
       Value: !GetAtt PedidosTable.Arn
       Export:
-        Name: ${self:service}-${self:provider.stage}-PedidosTableArn
+        Name: cw-pedidos-table-arn-${self:provider.stage}
+    
+    # NOMBRE de la tabla
+    ConnectionsTableName:
+      Description: "Nombre de la tabla de conexiones"
+      Value: !Ref ConnectionsTable
+      Export:
+        Name: cw-connections-table-name-${self:provider.stage}
+
+    # ARN de la tabla
+    ConnectionsTableArn:
+      Description: "ARN de la tabla de conexiones"
+      Value: !GetAtt ConnectionsTable.Arn
+      Export:
+        Name: cw-connections-table-arn-${self:provider.stage}
+    
+    # NOMBRE de la tabla
     UsuariosTableName:
         Value: !Ref UsuariosTable
         Export:
-          Name: ${self:service}-${self:provider.stage}-UsuariosTableName
+          Name: cw-usuarios-table-name-${self:provider.stage}
+    
+    # ARN de la tabla
     UsuariosTableArn:
         Value: !GetAtt UsuariosTable.Arn
         Export:
-          Name: ${self:service}-${self:provider.stage}-UsuariosTableArn
+          Name: cw-usuarios-table-arn-${self:provider.stage}

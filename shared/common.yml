@@ -7,7 +7,8 @@ provider:
   timeout: 29
   
   # Construcción dinámica del ARN del Rol usando el .env
-  role: arn:aws:iam::${env:AWS_ACCOUNT_ID}:role/LabRole
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
 
   environment:
     # Variable global disponible para todos los MS
